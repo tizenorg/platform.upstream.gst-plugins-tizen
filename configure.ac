@@ -1,5 +1,5 @@
 
-AC_INIT(extension, 1.0)
+AC_INIT(gst-plugins-tizen, 1.0)
  
 dnl versions of gstreamer and plugins-base
 GST_MAJORMINOR=1.0
@@ -156,35 +156,13 @@ dnl make _CFLAGS and _LIBS available
 AC_SUBST(GST_VIDEO_CFLAGS)
 AC_SUBST(GST_VIDEO_LIBS)
 
-dnl xvimagesrc _CFLAGS and _LIB available
-
-PKG_CHECK_MODULES(DRI2, libdri2)
-AC_SUBST(DRI2_CFLAGS)
-AC_SUBST(DRI2_LIBS)
-
-PKG_CHECK_MODULES(X11, x11)
-AC_SUBST(X11_CFLAGS)
-AC_SUBST(X11_LIBS)
-
-PKG_CHECK_MODULES(XEXT, xext)
-AC_SUBST(XEXT_CFLAGS)
-AC_SUBST(XEXT_LIBS)
-
-PKG_CHECK_MODULES(XV, xv)
-AC_SUBST(XV_CFLAGS)
-AC_SUBST(XV_LIBS)
-
-PKG_CHECK_MODULES(XDAMAGE, xdamage)
-AC_SUBST(XDAMAGE_CFLAGS)
-AC_SUBST(XDAMAGE_LIBS)
-
 PKG_CHECK_MODULES(DRM, libdrm)
 AC_SUBST(DRM_CFLAGS)
 AC_SUBST(DRM_LIBS)
 
-PKG_CHECK_MODULES(DRM, libdrm-devel)
-AC_SUBST(DRM_DEVEL_CFLAGS)
-AC_SUBST(DRM_DEVEL_LIBS)
+PKG_CHECK_MODULES(DRM_EXYNOS, libdrm_exynos)
+AC_SUBST(DRM_EXYNOS_CFLAGS)
+AC_SUBST(DRM_EXYNOS_LIBS)
 
 PKG_CHECK_MODULES(TBM, libtbm)
 AC_SUBST(TBM_CFLAGS)
@@ -194,7 +172,6 @@ dnl required package for evasimagesink/evaspixmapsink
 PKG_CHECK_MODULES(EFL, [
   evas >= $EFL_REQUIRED
   ecore >= $EFL_REQUIRED
-  ecore-x >= $EFL_REQUIRED
 ], [
   AC_SUBST(EFL_CFLAGS)
   AC_SUBST(EFL_LIBS)
@@ -243,6 +220,33 @@ AG_GST_CHECK_FEATURE(X, [X libraries and plugins],
     X_LIBS="$X_LIBS -lX11"
     AC_SUBST(X_CFLAGS)
     AC_SUBST(X_LIBS)
+
+    dnl xvimagesrc _CFLAGS and _LIB available
+
+    PKG_CHECK_MODULES(DRI2, libdri2)
+    AC_SUBST(DRI2_CFLAGS)
+    AC_SUBST(DRI2_LIBS)
+
+    PKG_CHECK_MODULES(X11, x11)
+    AC_SUBST(X11_CFLAGS)
+    AC_SUBST(X11_LIBS)
+
+    PKG_CHECK_MODULES(XEXT, xext)
+    AC_SUBST(XEXT_CFLAGS)
+    AC_SUBST(XEXT_LIBS)
+
+    PKG_CHECK_MODULES(XV, xv)
+    AC_SUBST(XV_CFLAGS)
+    AC_SUBST(XV_LIBS)
+
+    PKG_CHECK_MODULES(XDAMAGE, xdamage)
+    AC_SUBST(XDAMAGE_CFLAGS)
+    AC_SUBST(XDAMAGE_LIBS)
+
+    PKG_CHECK_MODULES(ECORE_X, ecore-x)
+    AC_SUBST(ECORE_X_CFLAGS)
+    AC_SUBST(ECORE_X_LIBS)
+
   fi
   AC_SUBST(HAVE_X)
   CFLAGS="$ac_cflags_save"
@@ -284,76 +288,77 @@ dnl PKG_CHECK_MODULES(UDEVMGR, unified-dev-mgr)
 dnl AC_SUBST(UDEVMGR_CFLAGS)
 dnl AC_SUBST(UDEVMGR_LIBS)
 
-dnl use ext-encodebin --------------------------------------------------------------------------
-AC_ARG_ENABLE(ext-encodebin, AC_HELP_STRING([--enable-ext-encodebin], [using encodebin]),
+dnl use encodebin --------------------------------------------------------------------------
+AC_ARG_ENABLE(encodebin, AC_HELP_STRING([--enable-encodebin], [using encodebin]),
   [
     case "${enableval}" in
-      yes) GST_EXT_USE_EXT_ENCODEBIN=yes ;;
-      no)  GST_EXT_USE_EXT_ENCODEBIN=no ;;
-      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-ext-encodebin) ;;
+      yes) GST_TIZEN_USE_ENCODEBIN=yes ;;
+      no)  GST_TIZEN_USE_ENCODEBIN=no ;;
+      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-encodebin) ;;
     esac
   ],
-  [GST_EXT_USE_EXT_ENCODEBIN=yes])
-AM_CONDITIONAL(GST_EXT_USE_EXT_ENCODEBIN, test "x$GST_EXT_USE_EXT_ENCODEBIN" = "xyes")
+  [GST_TIZEN_USE_ENCODEBIN=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_ENCODEBIN, test "x$GST_TIZEN_USE_ENCODEBIN" = "xyes")
 
-dnl use ext-evasimagesink --------------------------------------------------------------------------
-AC_ARG_ENABLE(ext-evasimagesink, AC_HELP_STRING([--enable-ext-evasimagesink], [using evasimagesink]),
+dnl use evasimagesink --------------------------------------------------------------------------
+AC_ARG_ENABLE(evasimagesink, AC_HELP_STRING([--enable-evasimagesink], [using evasimagesink]),
   [
     case "${enableval}" in
-      yes) GST_EXT_USE_EXT_EVASIMAGESINK=yes ;;
-      no)  GST_EXT_USE_EXT_EVASIMAGESINK=no ;;
-      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-ext-evasimagesink) ;;
+      yes) GST_TIZEN_USE_EVASIMAGESINK=yes ;;
+      no)  GST_TIZEN_USE_EVASIMAGESINK=no ;;
+      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-evasimagesink) ;;
     esac
   ],
-  [GST_EXT_USE_EXT_EVASIMAGESINK=yes])
-AM_CONDITIONAL(GST_EXT_USE_EXT_EVASIMAGESINK, test "x$GST_EXT_USE_EXT_EVASIMAGESINK" = "xyes")
+  [GST_TIZEN_USE_EVASIMAGESINK=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_EVASIMAGESINK, test "x$GST_TIZEN_USE_EVASIMAGESINK" = "xyes")
 
 dnl use evaspixmapsink ---------------------------------------------------------------------------
-AC_ARG_ENABLE(ext-evaspixmapsink, AC_HELP_STRING([--enable-ext-evaspixmapsink], [using evaspixmapsink]),
+AC_ARG_ENABLE(evaspixmapsink, AC_HELP_STRING([--enable-evaspixmapsink], [using evaspixmapsink]),
   [
     case "${enableval}" in
-      yes) GST_EXT_USE_EXT_EVASPIXMAPSINK=yes ;;
-      no)  GST_EXT_USE_EXT_EVASPIXMAPSINK=no ;;
-      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-ext-evaspixmapsink) ;;
+      yes) GST_TIZEN_USE_EVASPIXMAPSINK=yes ;;
+      no)  GST_TIZEN_USE_EVASPIXMAPSINK=no ;;
+      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-evaspixmapsink) ;;
     esac
   ],
-  [GST_EXT_USE_EXT_EVASPIXMAPSINK=yes])
-AM_CONDITIONAL(GST_EXT_USE_EXT_EVASPIXMAPSINK, test "x$GST_EXT_USE_EXT_EVASPIXMAPSINK" = "xyes")
+  [GST_TIZEN_USE_EVASPIXMAPSINK=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_EVASPIXMAPSINK, test "x$GST_TIZEN_USE_EVASPIXMAPSINK" = "xyes")
 
-dnl use ext-xvimagesrc--------------------------------------------------------------------------
-AC_ARG_ENABLE(ext-xvimagesrc, AC_HELP_STRING([--enable-ext-xvimagesrc], [using xvimagesrc]),
+dnl use xvimagesrc--------------------------------------------------------------------------
+AC_ARG_ENABLE(xvimagesrc, AC_HELP_STRING([--enable-xvimagesrc], [using xvimagesrc]),
   [
     case "${enableval}" in
-      yes) GST_EXT_USE_EXT_XVIMAGESRC=yes ;;
-      no)  GST_EXT_USE_EXT_XVIMAGESRC=no ;;
-      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-ext-xvimagesrc) ;;
+      yes) GST_TIZEN_USE_XVIMAGESRC=yes ;;
+      no)  GST_TIZEN_USE_XVIMAGESRC=no ;;
+      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-xvimagesrc) ;;
     esac
   ],
-  [GST_EXT_USE_EXT_XVIMAGESRC=yes])
-AM_CONDITIONAL(GST_EXT_USE_EXT_XVIMAGESRC, test "x$GST_EXT_USE_EXT_XVIMAGESRC" = "xyes")
+  [GST_TIZEN_USE_XVIMAGESRC=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_XVIMAGESRC, test "x$GST_TIZEN_USE_XVIMAGESRC" = "xyes")
 
-dnl use ext-drmsrc --------------------------------------------------------------------------
-AC_ARG_ENABLE(ext-drmsrc, AC_HELP_STRING([--enable-ext-drmsrc], [using drmsrc]),
+dnl use drmsrc --------------------------------------------------------------------------
+AC_ARG_ENABLE(drmsrc, AC_HELP_STRING([--enable-drmsrc], [using drmsrc]),
   [
     case "${enableval}" in
-      yes) GST_EXT_USE_EXT_DRMSRC=yes ;;
-      no)  GST_EXT_USE_EXT_DRMSRC=no ;;
-      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-ext-drmsrc) ;;
+      yes) GST_TIZEN_USE_DRMSRC=yes ;;
+      no)  GST_TIZEN_USE_DRMSRC=no ;;
+      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-drmsrc) ;;
     esac
   ],
-  [GST_EXT_USE_EXT_DRMSRC=yes])
-AM_CONDITIONAL(GST_EXT_USE_EXT_DRMSRC, test "x$GST_EXT_USE_EXT_DRMSRC" = "xyes")
-dnl use ext-toggle --------------------------------------------------------------------------
-AC_ARG_ENABLE(ext-toggle, AC_HELP_STRING([--enable-ext-toggle], [using toggle]),
+  [GST_TIZEN_USE_DRMSRC=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_DRMSRC, test "x$GST_TIZEN_USE_DRMSRC" = "xyes")
+
+dnl use toggle --------------------------------------------------------------------------
+AC_ARG_ENABLE(toggle, AC_HELP_STRING([--enable-toggle], [using toggle]),
   [
     case "${enableval}" in
-      yes) GST_EXT_USE_EXT_TOGGLE=yes ;;
-      no)  GST_EXT_USE_EXT_TOGGLE=no ;;
-      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-ext-toggle) ;;
+      yes) GST_TIZEN_USE_TOGGLE=yes ;;
+      no)  GST_TIZEN_USE_TOGGLE=no ;;
+      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-toggle) ;;
     esac
   ],
-  [GST_EXT_USE_EXT_TOGGLE=yes])
-AM_CONDITIONAL(GST_EXT_USE_EXT_TOGGLE, test "x$GST_EXT_USE_EXT_TOGGLE" = "xyes")
+  [GST_TIZEN_USE_TOGGLE=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_TOGGLE, test "x$GST_TIZEN_USE_TOGGLE" = "xyes")
 
 dnl for i386 --------------------------------------------------------------------------
 AC_ARG_ENABLE(i386, AC_HELP_STRING([--enable-i386], [i386 build]),
@@ -367,65 +372,67 @@ AC_ARG_ENABLE(i386, AC_HELP_STRING([--enable-i386], [i386 build]),
 	[IS_I386=no])
 AM_CONDITIONAL([IS_I386], [test "x$IS_I386" = "xyes"])
 
-dnl use ext-pdpushsrc --------------------------------------------------------------------------
-AC_ARG_ENABLE(ext-pdpushsrc, AC_HELP_STRING([--enable-ext-pdpushsrc], [using pdpushsrc]),
+dnl use pdpushsrc --------------------------------------------------------------------------
+AC_ARG_ENABLE(pdpushsrc, AC_HELP_STRING([--enable-pdpushsrc], [using pdpushsrc]),
 [
  case "${enableval}" in
-	 yes) GST_EXT_USE_EXT_PD_PUSHSRC=yes ;;
-	 no)  GST_EXT_USE_EXT_PD_PUSHSRC=no ;;
-	 *)   AC_MSG_ERROR(bad value ${enableval} for --enable-ext-pdpushsrc) ;;
+	 yes) GST_TIZEN_USE_PD_PUSHSRC=yes ;;
+	 no)  GST_TIZEN_USE_PD_PUSHSRC=no ;;
+	 *)   AC_MSG_ERROR(bad value ${enableval} for --enable-pdpushsrc) ;;
  esac
  ],
- [GST_EXT_USE_EXT_PD_PUSHSRC=yes])
-AM_CONDITIONAL(GST_EXT_USE_EXT_PD_PUSHSRC, test "x$GST_EXT_USE_EXT_PD_PUSHSRC" = "xyes")
-dnl use ext-audiotp --------------------------------------------------------------------------
-AC_ARG_ENABLE(ext-audiotp, AC_HELP_STRING([--enable-ext-audiotp], [using audiotp]),
-[
- case "${enableval}" in
-	 yes) GST_EXT_USE_EXT_AUDIOTP=yes ;;
-	 no)  GST_EXT_USE_EXT_AUDIOTP=no ;;
-	 *)   AC_MSG_ERROR(bad value ${enableval} for --enable-ext-audiotp) ;;
- esac
- ],
- [GST_EXT_USE_EXT_AUDIOTP=yes])
-AM_CONDITIONAL(GST_EXT_USE_EXT_AUDIOTP, test "x$GST_EXT_USE_EXT_AUDIOTP" = "xyes")
+ [GST_TIZEN_USE_PD_PUSHSRC=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_PD_PUSHSRC, test "x$GST_TIZEN_USE_PD_PUSHSRC" = "xyes")
 
-dnl use ext-audioeq --------------------------------------------------------------------------
-AC_ARG_ENABLE(ext-audioeq, AC_HELP_STRING([--enable-ext-audioeq], [using audioeq]),
+dnl use audiotp --------------------------------------------------------------------------
+AC_ARG_ENABLE(audiotp, AC_HELP_STRING([--enable-audiotp], [using audiotp]),
 [
  case "${enableval}" in
-         yes) GST_EXT_USE_EXT_AUDIOEQ=yes ;;
-         no)  GST_EXT_USE_EXT_AUDIOEQ=no ;;
-         *)   AC_MSG_ERROR(bad value ${enableval} for --enable-ext-audioeq) ;;
+	 yes) GST_TIZEN_USE_AUDIOTP=yes ;;
+	 no)  GST_TIZEN_USE_AUDIOTP=no ;;
+	 *)   AC_MSG_ERROR(bad value ${enableval} for --enable-audiotp) ;;
  esac
  ],
- [GST_EXT_USE_EXT_AUDIOEQ=yes])
-AM_CONDITIONAL(GST_EXT_USE_EXT_AUDIOEQ, test "x$GST_EXT_USE_EXT_AUDIOEQ" = "xyes")
+ [GST_TIZEN_USE_AUDIOTP=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_AUDIOTP, test "x$GST_TIZEN_USE_AUDIOTP" = "xyes")
 
-dnl use ext-fimcconvert ----------------------------------------------------------------------
-AC_ARG_ENABLE(ext-fimcconvert, AC_HELP_STRING([--enable-ext-fimcconvert], [using fimcconvert]),
+dnl use audioeq --------------------------------------------------------------------------
+AC_ARG_ENABLE(audioeq, AC_HELP_STRING([--enable-audioeq], [using audioeq]),
 [
  case "${enableval}" in
-         yes) GST_EXT_USE_EXT_FIMCCONVERT=yes ;;
-         no)  GST_EXT_USE_EXT_FIMCCONVERT=no ;;
-         *)   AC_MSG_ERROR(bad value ${enableval} for --enable-ext-fimcconvert) ;;
+         yes) GST_TIZEN_USE_AUDIOEQ=yes ;;
+         no)  GST_TIZEN_USE_AUDIOEQ=no ;;
+         *)   AC_MSG_ERROR(bad value ${enableval} for --enable-audioeq) ;;
  esac
  ],
- [GST_EXT_USE_EXT_FIMCCONVERT=yes])
-AM_CONDITIONAL(GST_EXT_USE_EXT_FIMCCONVERT, test "x$GST_EXT_USE_EXT_FIMCCONVERT" = "xyes")
+ [GST_TIZEN_USE_AUDIOEQ=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_AUDIOEQ, test "x$GST_TIZEN_USE_AUDIOEQ" = "xyes")
 
-dnl use ext-wfdrtspsrc --------------------------------------------------------------------------
-AC_ARG_ENABLE(ext-wfdrtspsrc, AC_HELP_STRING([--enable-ext-wfdrtspsrc], [using wfdrtspsrc]),
+dnl use fimcconvert ----------------------------------------------------------------------
+AC_ARG_ENABLE(fimcconvert, AC_HELP_STRING([--enable-fimcconvert], [using fimcconvert]),
 [
  case "${enableval}" in
-  yes) GST_EXT_USE_EXT_WFDRTSPSRC=yes ;;
-  no)  GST_EXT_USE_EXT_WFDRTSPSRC=no ;;
-  *)   AC_MSG_ERROR(bad value ${enableval} for --enable-ext-wfdrtspsrc) ;;
+         yes) GST_TIZEN_USE_FIMCCONVERT=yes ;;
+         no)  GST_TIZEN_USE_FIMCCONVERT=no ;;
+         *)   AC_MSG_ERROR(bad value ${enableval} for --enable-fimcconvert) ;;
  esac
  ],
- [GST_EXT_USE_EXT_WFDRTSPSRC=yes])
-AM_CONDITIONAL(GST_EXT_USE_EXT_WFDRTSPSRC, test "x$GST_EXT_USE_EXT_WFDRTSPSRC" = "xyes")
-dnl if [test "x$GST_EXT_USE_EXT_WFDRTSPSRC" = "xyes"];
+ [GST_TIZEN_USE_FIMCCONVERT=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_FIMCCONVERT, test "x$GST_TIZEN_USE_FIMCCONVERT" = "xyes")
+
+dnl use wfdrtspsrc --------------------------------------------------------------------------
+AC_ARG_ENABLE(wfdrtspsrc, AC_HELP_STRING([--enable-wfdrtspsrc], [using wfdrtspsrc]),
+[
+ case "${enableval}" in
+  yes) GST_TIZEN_USE_WFDRTSPSRC=yes ;;
+  no)  GST_TIZEN_USE_WFDRTSPSRC=no ;;
+  *)   AC_MSG_ERROR(bad value ${enableval} for --enable-wfdrtspsrc) ;;
+ esac
+ ],
+ [GST_TIZEN_USE_WFDRTSPSRC=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_WFDRTSPSRC, test "x$GST_TIZEN_USE_WFDRTSPSRC" = "xyes")
+
+dnl if [test "x$GST_TIZEN_USE_WFDRTSPSRC" = "xyes"];
 dnl then
 dnl PKG_CHECK_MODULES(MM_WFD_COMMON, mm-scmirroring-common)
 dnl AC_SUBST(MM_WFD_COMMON_CFLAGS)
@@ -458,3 +465,4 @@ fimcconvert/src/Makefile
 dnl wfdrtspsrc/Makefile
 dnl wfdrtspsrc/src/Makefile
 )
+

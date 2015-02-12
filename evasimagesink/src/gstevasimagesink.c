@@ -36,7 +36,6 @@
 #include <gst/video/gstvideosink.h>
 #include <Evas.h>
 #include <Ecore.h>
-#include <Ecore_X.h>
 
 #include "gstevasimagesink.h"
 

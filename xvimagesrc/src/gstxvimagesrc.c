@@ -638,7 +638,9 @@ drm_convert_gem_to_fd (int *gemname_cnt, int drm_fd, unsigned int name,
 
     struct drm_prime_handle prime;
     struct drm_gem_open gem_open;
+    /* TODO: drm_exynos_gem_mmap was removed. It can be replaced with drm_mode_map_dumb.
     struct drm_exynos_gem_mmap gem_mmap;        //for virtual address
+    */
 
     memset (&gem_open, 0, sizeof (struct drm_gem_open));
     gem_open.name = name;
@@ -659,20 +661,28 @@ drm_convert_gem_to_fd (int *gemname_cnt, int drm_fd, unsigned int name,
     /*get virtual address */
     /*set name */
     xv_gem_mmap->name[count] = name;
+    /* TODO: drm_exynos_gem_mmap was removed. It can be replaced with drm_mode_map_dumb.
     memset (&gem_mmap, 0, sizeof (struct drm_exynos_gem_mmap));
     gem_mmap.handle = prime.handle;
     gem_mmap.size = gem_open.size;
+    */
 
     /*set size */
+    /* TODO: drm_exynos_gem_mmap was removed. It can be replaced with drm_mode_map_dumb.
     xv_gem_mmap->buffer_size[count] = gem_mmap.size;
+    */
+    /* TODO: DRM_IOCTL_EXYNOS_GEM_MMAP was removed. It can be replaced with drm_mmap.
     if (drmIoctl (drm_fd, DRM_IOCTL_EXYNOS_GEM_MMAP, &gem_mmap) != 0) {
       GST_ERROR ("Gem mmap failed [handle %d, size %lld]", gem_mmap.handle,
           gem_mmap.size);
       return 0;
     }
+    */
 
     /*set virtual address */
+    /* TODO: drm_exynos_gem_mmap was removed. It can be replaced with drm_mode_map_dumb.
     xv_gem_mmap->address[count] = (void *) (gem_mmap.mapped);
+    */
     GST_DEBUG ("%u - Virtual address[%d] = %p size=%d ", name, count,
         xv_gem_mmap->address[count], xv_gem_mmap->buffer_size[count]);
 

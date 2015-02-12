@@ -273,7 +273,6 @@ static gboolean gst_encode_bin_init_image_elements (GstElement *element, gpointe
 static gboolean gst_encode_bin_block(GstEncodeBin *encodebin, gboolean value);
 static gboolean gst_encode_bin_pause(GstEncodeBin *encodebin, gboolean value);
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-static gboolean gst_encode_bin_release_pipeline (GstElement *element, gpointer user_data);
 static GstPad*	gst_encode_bin_get_mux_sink_pad(GstElement *mux, GstEncodeBinMuxSinkPad type);
 
 //Data probe
@@ -932,11 +931,9 @@ gst_encode_bin_class_init (GstEncodeBinClass *klass)
 {
 	GObjectClass *gobject_klass;
 	GstElementClass *gstelement_klass;
-	GstBinClass *gstbin_klass;
 
 	gobject_klass = (GObjectClass *) klass;
 	gstelement_klass = (GstElementClass *) klass;
-	gstbin_klass = (GstBinClass *) klass;
 	
 	parent_class = g_type_class_peek_parent (klass);
 
@@ -1103,8 +1100,6 @@ gst_encode_bin_class_init (GstEncodeBinClass *klass)
 static void
 gst_encode_bin_init (GstEncodeBin *encodebin)
 {
-	encodebin->mutex = g_mutex_new();
-
 	if (encodebin->srcpad == NULL) {
 		encodebin->srcpad = gst_ghost_pad_new_no_target ("src", GST_PAD_SRC);
 		gst_element_add_pad (GST_ELEMENT(encodebin), encodebin->srcpad);
@@ -1242,10 +1237,6 @@ gst_encode_bin_dispose (GObject * object)
 static void
 gst_encode_bin_finalize (GObject * object)
 {
-	GstEncodeBin *encodebin = GST_ENCODE_BIN (object);
-
-	g_mutex_free (encodebin->mutex);
-
 	G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
@@ -1295,18 +1286,9 @@ gst_encode_bin_change_state (GstElement * element, GstStateChange transition)
 }
 
 static void
-gst_encode_bin_release_all_pads (GstEncodeBin *encodebin)
-{
-	gst_element_remove_pad(GST_ELEMENT(encodebin), encodebin->video_sinkpad);
-	gst_element_remove_pad(GST_ELEMENT(encodebin), encodebin->audio_sinkpad);
-	gst_element_remove_pad(GST_ELEMENT(encodebin), encodebin->image_sinkpad);
-}
-
-static void
 gst_encode_bin_release_pad (GstElement * element, GstPad * pad)
 {
 	GstEncodeBin *encodebin = GST_ENCODE_BIN (element);
-	GstPad *muxpad = NULL;
 	
 	if(!pad_compare_name(pad, "video")) {
 #if 0		
@@ -1362,7 +1344,6 @@ gst_encode_bin_release_pad (GstElement * element, GstPad * pad)
 
 		encodebin->mux_audio_sinkpad;
 		gst_element_release_request_pad(encodebin->mux, encodebin->mux_audio_sinkpad);
-		muxpad = NULL;
 
 		if(encodebin->mux_video_sinkpad == NULL) {
 			gst_encode_bin_remove_element(encodebin, encodebin->mux);
@@ -2222,7 +2203,7 @@ image_link_fail:
 static gboolean 
 gst_encode_bin_unlink_elements (GstEncodeBin *encodebin)
 {
-	GstPad *pad = NULL, *muxpad = NULL;
+	GstPad *pad = NULL;
 	
 	switch(encodebin->profile) {
 		case GST_ENCODE_BIN_PROFILE_AV :
@@ -2266,22 +2247,6 @@ gst_encode_bin_unlink_elements (GstEncodeBin *encodebin)
 
 			if(encodebin->mux_video_sinkpad != NULL)
 			{
-#if 0			
-				if(encodebin->use_venc_queue)
-				{
-					gst_element_unlink(encodebin->video_encode, encodebin->video_encode_queue);
-
-					pad = gst_element_get_static_pad (encodebin->video_encode_queue, "src");
-					gst_pad_unlink(pad, muxpad);
-					gst_object_unref(pad);
-					pad = NULL;
-
-					if ( g_signal_handler_is_connected ( encodebin->video_encode_queue, encodebin->veque_sig_id) )
-					{
-						g_signal_handler_disconnect (  encodebin->video_encode_queue, encodebin->veque_sig_id );
-					}
-				}
-#else
 				if(encodebin->video_encode_queue)
 				{
 					gst_element_unlink(encodebin->video_encode, encodebin->video_encode_queue);
@@ -2296,7 +2261,6 @@ gst_encode_bin_unlink_elements (GstEncodeBin *encodebin)
 						g_signal_handler_disconnect (  encodebin->video_encode_queue, encodebin->veque_sig_id );
 					}
 				}
-#endif
 				else
 				{
 					pad = gst_element_get_static_pad (encodebin->video_encode, "src");
@@ -2778,7 +2742,8 @@ static gboolean gst_encode_bin_pause(GstEncodeBin *encodebin, gboolean value)
 		if (encodebin->paused_time == 0)
 		{
 			//get steam time
-			if (clock = GST_ELEMENT_CLOCK(encodebin))		//before PLAYING, this would be NULL. Need to check.
+			clock = GST_ELEMENT_CLOCK(encodebin);
+			if (clock)		//before PLAYING, this would be NULL. Need to check.
 			{
 				GstClockTime current_time, base_time;
 
@@ -2806,7 +2771,8 @@ static gboolean gst_encode_bin_pause(GstEncodeBin *encodebin, gboolean value)
 		/* release paused-stream*/
 		if (encodebin->paused_time != 0)
 		{
-			if (clock = GST_ELEMENT_CLOCK(encodebin))
+			clock = GST_ELEMENT_CLOCK(encodebin);
+			if (clock)
 			{
 				GstClockTime current_time, base_time;
 				GstClockTime paused_gap;
@@ -2858,52 +2824,6 @@ resume_fail:
 		g_signal_emit (G_OBJECT (encodebin), gst_encode_bin_signals[SIGNAL_STREAM_RESUME], 0, FALSE);
 #endif		
 	return FALSE;	
-}
-
-static gboolean
-gst_encode_bin_release_pipeline (GstElement *element,
-      gpointer user_data)
-{
-#if 0
-  GstEncodeBin *encodebin = GST_ENCODE_BIN (element);
-
-  gst_element_set_state (encodebin->audio_queue, GST_STATE_NULL);
-  gst_element_set_state (encodebin->audio_encode, GST_STATE_NULL);
-  gst_element_set_state (encodebin->video_queue, GST_STATE_NULL);
-  gst_element_set_state (encodebin->video_encode, GST_STATE_NULL);
-  gst_element_set_state (encodebin->mux, GST_STATE_NULL);
-
-  if (encodebin->auto_video_scale) {
-    gst_element_set_state (encodebin->video_scale, GST_STATE_NULL);
-    gst_element_unlink (encodebin->video_queue, encodebin->video_scale);
-    gst_element_unlink (encodebin->video_scale, encodebin->video_encode);
-    gst_bin_remove (GST_BIN (element), encodebin->video_scale);
-
-    encodebin->video_scale = NULL;
-  } else {
-    gst_element_unlink (encodebin->video_queue, encodebin->video_encode);
-  }
-
-  gst_pad_unlink (gst_element_get_pad (encodebin->audio_encode, "src"), 
-                       encodebin->mux_audio_sinkpad);
-  gst_pad_unlink (gst_element_get_pad (encodebin->video_encode, "src"), 
-                       encodebin->mux_video_sinkpad);
-
-  gst_bin_remove_many (GST_BIN (element),
-                               encodebin->audio_queue,
-                               encodebin->audio_encode,
-                               encodebin->video_queue,
-                               encodebin->video_encode,
-                               encodebin->mux,
-                               NULL);
-
-  encodebin->audio_queue = NULL;
-  encodebin->audio_encode = NULL;
-  encodebin->video_queue = NULL;
-  encodebin->video_encode = NULL;
-  encodebin->mux = NULL;
-#endif
-  return TRUE;
 }
 
 static GstPadProbeReturn

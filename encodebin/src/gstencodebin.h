@@ -66,8 +66,6 @@ struct _GstEncodeBin
 {
   GstBin bin;                   /* we extend GstBin */
 
-  GMutex *mutex;
-
   /* pads */
   GstPad *srcpad;
   GstPad *video_sinkpad;

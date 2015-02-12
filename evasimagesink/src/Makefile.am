@@ -17,8 +17,8 @@ plugin_LTLIBRARIES = libgstevasimagesink.la
 libgstevasimagesink_la_SOURCES = gstevasimagesink.c gstevasimagesink.h
 
 # compiler and linker flags used to compile this plugin, set in configure.ac
-libgstevasimagesink_la_CFLAGS = $(GST_CFLAGS) $(GST_VIDEO_CFLAGS) $(EFL_CFLAGS) $(TBM_CFLAGS)
-libgstevasimagesink_la_LIBADD = $(GST_LIBS) $(GST_VIDEO_LIBS) $(EFL_LIBS) $(TBM_LIBS)
+libgstevasimagesink_la_CFLAGS = $(GST_CFLAGS) $(GST_VIDEO_CFLAGS) $(EFL_CFLAGS) $(TBM_CFLAGS) $(ECORE_X_CFLAGS)
+libgstevasimagesink_la_LIBADD = $(GST_LIBS) $(GST_VIDEO_LIBS) $(EFL_LIBS) $(TBM_LIBS) $(ECORE_X_LIBS)
 libgstevasimagesink_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
 libgstevasimagesink_la_LIBTOOLFLAGS = --tag=disable-static
 
