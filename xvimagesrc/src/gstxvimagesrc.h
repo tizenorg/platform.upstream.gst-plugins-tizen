@@ -100,12 +100,17 @@ struct _GstXVImageSrc
   GThread *updates_thread;
   gboolean thread_return;
   GQueue *queue;
-  GMutex *queue_lock;
-  GCond *queue_cond;
-  GMutex *cond_lock;
-  GCond *buffer_cond;
-  GMutex *buffer_cond_lock;
-  GMutex *dpy_lock;
+  GMutex queue_lock;
+  GCond queue_cond;
+  GMutex cond_lock;
+  GCond buffer_cond;
+  GMutex buffer_cond_lock;
+  GMutex dpy_lock;
+
+  gboolean pause_cond_var;
+  GCond pause_cond;
+  GMutex pause_lock;
+
   gint drm_fd;
   int current_data_type;
   int new_data_type;

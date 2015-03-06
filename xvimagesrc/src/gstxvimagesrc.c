@@ -251,11 +251,11 @@ static GstXvImageOutBuffer *
 gst_xv_image_out_buffer_new (GstXVImageSrc * src)
 {
   GstXvImageOutBuffer *newbuf = NULL;
-  GST_LOG ("gst_omx_out_buffer_new");
+  GST_LOG ("gst_xv_image_out_buffer_new");
 
   newbuf = (GstXvImageOutBuffer *) malloc (sizeof (GstXvImageOutBuffer));
   if (!newbuf) {
-    GST_ERROR ("gst_omx_out_buffer_new out of memory");
+    GST_ERROR ("gst_xv_image_out_buffer_new out of memory");
     return NULL;
   }
   GST_LOG ("creating buffer : %p", newbuf);
@@ -336,20 +336,18 @@ gst_xv_image_src_change_state (GstElement * element, GstStateChange transition)
       break;
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
       GST_WARNING_OBJECT (src, "GST_STATE_CHANGE_PAUSED_TO_PLAYING");
-      //src->pause_cond_var = FALSE;
-      //g_cond_signal(src->pause_cond);
+      src->pause_cond_var = FALSE;
+      g_cond_signal(&src->pause_cond);
       break;
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
       GST_WARNING_OBJECT (src, "GST_STATE_CHANGE_PLAYING_TO_PAUSED: START");
-      //src->pause_cond_var = TRUE;
-      //g_cond_wait(src->pause_resp, src->pause_resp_lock);
+      src->pause_cond_var = TRUE;
       GST_WARNING_OBJECT (src, "GST_STATE_CHANGE_PLAYING_TO_PAUSED: End");
       break;
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       GST_WARNING_OBJECT (src, "GST_STATE_CHANGE_PAUSED_TO_READY");
-      //src->thread_return = TRUE;
-      //g_cond_signal(src->pause_cond);
-      //g_cond_signal(src->queue_cond);
+      src->thread_return = TRUE;
+      g_cond_signal(&src->pause_cond);
       break;
     case GST_STATE_CHANGE_READY_TO_NULL:
       break;
@@ -509,13 +507,26 @@ gst_xv_image_src_init (GstXVImageSrc * src)
   src->bo = NULL;
   src->dri2_buffers = NULL;
   src->buf_share_method = BUF_SHARE_METHOD_TIZEN_BUFFER;
-  src->queue_lock = g_mutex_new ();
+  //src->queue_lock = g_mutex_new ();
+  g_mutex_init (&src->queue_lock);
   src->queue = g_queue_new ();
-  src->queue_cond = g_cond_new ();
-  src->cond_lock = g_mutex_new ();
-  src->buffer_cond = g_cond_new ();
-  src->buffer_cond_lock = g_mutex_new ();
-  src->dpy_lock = g_mutex_new ();
+  //src->queue_cond = g_cond_new ();
+  g_cond_init (&src->queue_cond);
+  //src->cond_lock = g_mutex_new ();
+  g_mutex_init (&src->cond_lock);
+  //src->buffer_cond = g_cond_new ();
+  //src->buffer_cond_lock = g_mutex_new ();
+  g_cond_init (&src->buffer_cond);
+  g_mutex_init (&src->buffer_cond_lock);
+  //src->dpy_lock = g_mutex_new ();
+  g_mutex_init (&src->dpy_lock);
+
+  src->pause_cond_var = FALSE;
+  //src->pause_cond = g_cond_new ();
+  //src->pause_lock = g_mutex_new ();
+  g_cond_init (&src->pause_cond);
+  g_mutex_init (&src->pause_lock);
+
   src->drm_fd = -1;
   src->current_data_type = VIDEO_TYPE_VIDEO_WITH_UI;
   src->new_data_type = VIDEO_TYPE_VIDEO_WITH_UI;
@@ -535,7 +546,6 @@ gst_xv_image_src_finalize (GObject * gobject)
 {
   GstXVImageSrc *src = GST_XV_IMAGE_SRC (gobject);
   GST_DEBUG_OBJECT (src, "finalize");
-  g_mutex_free (src->queue_lock);
   drm_finalize (src);
   G_OBJECT_CLASS (parent_class)->finalize (gobject);
 }
@@ -780,49 +790,53 @@ gst_xv_image_src_get_property (GObject * object, guint prop_id,
 }
 
 static gboolean
-gst_xv_image_src_get_timeinfo (GstXVImageSrc * src, GstBuffer * buffer)
+gst_xv_image_src_get_timeinfo (GstXVImageSrc *src, GstClockTime *time, GstClockTime *dur)
 {
   int fps_nu = 0;
   int fps_de = 0;
   GstClockTime timestamp = GST_CLOCK_TIME_NONE;
   GstClockTime duration = GST_CLOCK_TIME_NONE;
-  GstClock *clock;
+  static GstClockTime prev_timestamp = 0;
 
-  if (!src || !buffer) {
-    GST_WARNING ("Invalid pointer [handle:%p, buffer:%p]", src, buffer);
+  GstClock *clock;
+  if (!src) {
+    GST_WARNING("Invalid pointer [handle:%p]", src);
     return FALSE;
   }
-
   clock = gst_element_get_clock (GST_ELEMENT (src));
   if (clock) {
     timestamp = gst_clock_get_time (clock);
-    timestamp -= gst_element_get_base_time (GST_ELEMENT (src));
+    if(!gst_element_get_base_time (GST_ELEMENT(src)))
+      timestamp = GST_CLOCK_TIME_NONE;
+    else timestamp -= gst_element_get_base_time (GST_ELEMENT (src));
     gst_object_unref (clock);
   } else {
     /* not an error not to have a clock */
     timestamp = GST_CLOCK_TIME_NONE;
   }
 
+  if ((timestamp - prev_timestamp <= 30000000) || (timestamp-prev_timestamp >=36000000)) {
+    /*GST_ERROR("Gap is below 30ms or over 36ms!!");*/
+  }
+
   /* if we have a framerate adjust timestamp for frame latency */
-  if ((int) ((float) src->rate_numerator / (float) src->rate_denominator) <= 0) {
-    /*if fps is zero, auto fps mode */
+  if ((int)((float)src->rate_numerator / (float)src->rate_denominator) <= 0) {
+    /*if fps is zero, auto fps mode*/
     fps_nu = 0;
     fps_de = 1;
   } else {
     fps_nu = 1;
-    fps_de =
-        (int) ((float) src->rate_numerator / (float) src->rate_denominator);
+    fps_de = (int)((float)src->rate_numerator / (float)src->rate_denominator);
   }
-
   if (fps_nu > 0 && fps_de > 0) {
     GstClockTime latency;
-    latency = gst_util_uint64_scale_int (GST_SECOND, fps_nu, fps_de);
+    latency = gst_util_uint64_scale_int(GST_SECOND, fps_nu, fps_de);
     duration = latency;
   }
-
-  GST_BUFFER_TIMESTAMP (buffer) = timestamp;
-  GST_BUFFER_DURATION (buffer) = duration;
-
+  //timestamp+=src->initial_audio_latency;
+  *time = timestamp;
+  *dur = duration;
+  prev_timestamp = timestamp;
   return TRUE;
 }
 
@@ -889,29 +903,32 @@ gst_xv_image_src_create (GstPushSrc * psrc, GstBuffer ** buffer)
   GstXvImageOutBuffer *outbuf = NULL;
 
   src = GST_XV_IMAGE_SRC (psrc);
-  g_mutex_lock (src->queue_lock);
+  g_mutex_lock (&src->queue_lock);
 
   if (g_queue_is_empty (src->queue)) {
-    g_mutex_unlock (src->queue_lock);
-    g_cond_wait (src->queue_cond, src->cond_lock);
+    g_mutex_unlock (&src->queue_lock);
 
-    g_mutex_lock (src->queue_lock);
+    g_mutex_lock (&src->cond_lock);
+    g_cond_wait (&src->queue_cond, &src->cond_lock);
+    g_mutex_unlock (&src->cond_lock);
+
+    g_mutex_lock (&src->queue_lock);
     outbuf = (GstXvImageOutBuffer *) g_queue_pop_head (src->queue);
-    g_mutex_unlock (src->queue_lock);
+    g_mutex_unlock (&src->queue_lock);
   } else {
     GstXvImageOutBuffer *tempbuf = NULL;
     while ((tempbuf =
             (GstXvImageOutBuffer *) g_queue_pop_head (src->queue)) != NULL) {
       /* To reduce latency, skipping the old frames and submitting only latest frames */
       outbuf = tempbuf;
-      g_mutex_unlock (src->queue_lock);
     }
+    g_mutex_unlock (&src->queue_lock);
   }
 
   if (outbuf == NULL)
     return GST_FLOW_ERROR;
 
-  GST_INFO ("gem_name=%d, fd_name=%d, Time stamp of the buffer is %"
+  GST_WARNING ("gem_name=%d, fd_name=%d, Time stamp of the buffer is %"
       GST_TIME_FORMAT, outbuf->YBuf, outbuf->fd_name,
       GST_TIME_ARGS (GST_BUFFER_TIMESTAMP (outbuf->buffer)));
 
@@ -937,12 +954,16 @@ static gboolean
 xvimagesrc_thread_start (GstXVImageSrc * src)
 {
   GError *error;
-  if (!src->updates_thread)
+  if (!src->updates_thread) {
     src->updates_thread =
         g_thread_create ((GThreadFunc) gst_xv_image_src_update_thread, src,
         TRUE, &error);
-  else
+
+    GST_WARNING_OBJECT (src, "image capture thread start");
+  } else {
     GST_LOG_OBJECT (src, "The thread function already running");
+  }
+
   return TRUE;
 }
 
@@ -994,26 +1015,23 @@ static void
 gst_xv_image_out_buffer_unref (gpointer userdata)
 {
   Atom atom_retbuf = 0;
-  //GstXVImageSrc *xvimagesrc = userdata;
   GstXvImageOutBuffer *buffer = userdata;
 
-  GST_WARNING ("Buffer unref!!");
-
-  GST_WARNING ("Unref bo: %p %p", buffer->bo[0], buffer->bo[1]);
   tbm_bo_unref (buffer->bo[0]);
   tbm_bo_unref (buffer->bo[1]);
 
-  g_mutex_lock (buffer->xvimagesrc->dpy_lock);
+  g_mutex_lock (&buffer->xvimagesrc->dpy_lock);
   atom_retbuf =
       XInternAtom (buffer->xvimagesrc->dpy,
       "_USER_WM_PORT_ATTRIBUTE_RETURN_BUFFER", False);
 
   /* data->YBuf is gemname, refer to drm_convert_gem_to_fd */
+  GST_DEBUG ("gst_xv_image_out_buffer_unref : Gem [%d]", buffer->YBuf);
   XvSetPortAttribute (buffer->xvimagesrc->dpy, buffer->xvimagesrc->p,
       atom_retbuf, buffer->YBuf);
 
-  g_mutex_unlock (buffer->xvimagesrc->dpy_lock);
-  g_cond_signal (buffer->xvimagesrc->buffer_cond);
+  g_mutex_unlock (&buffer->xvimagesrc->dpy_lock);
+  g_cond_signal (&buffer->xvimagesrc->buffer_cond);
 
 #ifdef DEBUG_BUFFER
   int i = 0;
@@ -1112,7 +1130,8 @@ gst_xv_image_src_update_thread (void *asrc)
   struct timeval start_time, end_time;
   long duration;
   long starttime, endtime;
-  GTimeVal timeout;
+  //GTimeVal timeout;
+  guint64 timeout;
   XEvent ev;
   void *virtual_address = NULL;
   guint buf_size_Y = 0;
@@ -1120,7 +1139,11 @@ gst_xv_image_src_update_thread (void *asrc)
   int (*handler) (Display *, XErrorEvent *);
   GstXvImageOutBuffer *outbuf = NULL;
 
+  gboolean pause_trigger = FALSE;
   gboolean got_display_select_req = FALSE;
+
+  GstClockTime ts_putstill = 0;
+  GstClockTime dur_putstill = 0;
 
   while (!src->thread_return) {
     duration = 0;
@@ -1136,31 +1159,54 @@ gst_xv_image_src_update_thread (void *asrc)
     duration = 0;
     outbuf = NULL;
 
-    g_mutex_lock (src->dpy_lock);
+    if (pause_trigger) {
+      GST_WARNING_OBJECT (src, "PAUSED in capture thread");
+      g_mutex_lock (&src->pause_lock);
+      g_cond_wait (&src->pause_cond, &src->pause_lock);
+      g_mutex_unlock (&src->pause_lock);
+      pause_trigger = FALSE;
+      continue;
+    }
+
+    if (src->pause_cond_var) {
+      pause_trigger = TRUE;
+    }
+
+    g_mutex_lock (&src->dpy_lock);
     XSync (src->dpy, 0);
-    g_mutex_unlock (src->dpy_lock);
+    g_mutex_unlock (&src->dpy_lock);
     error_caught = FALSE;
     handler = XSetErrorHandler (gst_xvimagesrc_handle_xerror);
 
-    g_mutex_lock (src->dpy_lock);
+    g_mutex_lock (&src->dpy_lock);
     XvPutStill (src->dpy, src->p, src->pixmap, src->gc, 0, 0, src->width,
         src->height, 0, 0, src->width, src->height);
     XSync (src->dpy, 0);
-    g_mutex_unlock (src->dpy_lock);
+    g_mutex_unlock (&src->dpy_lock);
+
+    gst_xv_image_src_get_timeinfo (src, &ts_putstill, &dur_putstill);
 
     if (error_caught) {
       GST_ERROR
           ("gst_xv_image_src_update_thread error_caught is TRUE, X is out of buffers");
       error_caught = FALSE;
       XSetErrorHandler (handler);
+
+#if 1
+      timeout = g_get_monotonic_time () + BUFFER_COND_WAIT_TIMEOUT;
+#else
       g_get_current_time (&timeout);
       g_time_val_add (&timeout, BUFFER_COND_WAIT_TIMEOUT);
-      if (!g_cond_timed_wait (src->buffer_cond, src->buffer_cond_lock,
-              &timeout)) {
+#endif
+
+      g_mutex_lock (&src->buffer_cond_lock);
+      if (!g_cond_wait_until (&src->buffer_cond, &src->buffer_cond_lock,
+              timeout)) {
         GST_ERROR ("skip wating");
       } else {
         GST_ERROR ("Signal received");
       }
+      g_mutex_unlock (&src->buffer_cond_lock);
       continue;
     }
 
@@ -1169,15 +1215,15 @@ gst_xv_image_src_update_thread (void *asrc)
     XSetErrorHandler (handler);
 
   next_event:
-    g_mutex_lock (src->dpy_lock);
+    g_mutex_lock (&src->dpy_lock);
     XNextEvent (src->dpy, &ev); /* wating for x event */
-    g_mutex_unlock (src->dpy_lock);
+    g_mutex_unlock (&src->dpy_lock);
 
     if (ev.type == (src->damage_base + XDamageNotify)) {
       XDamageNotifyEvent *damage_ev = (XDamageNotifyEvent *) & ev;
       GST_INFO ("gst_xv_image_src_update_thread XDamageNotifyEvent");
 
-      g_mutex_lock (src->dpy_lock);
+      g_mutex_lock (&src->dpy_lock);
       if (damage_ev->drawable == src->pixmap) {
         pixmap_update (src, src->dpy, src->bufmgr, src->pixmap,
             damage_ev->area.x,
@@ -1186,7 +1232,7 @@ gst_xv_image_src_update_thread (void *asrc)
       }
 
       XDamageSubtract (src->dpy, src->damage, None, None);
-      g_mutex_unlock (src->dpy_lock);
+      g_mutex_unlock (&src->dpy_lock);
     } else if (ev.type == SelectionClear) {
       /* Added to handle display selection notify */
       //XSelectionEvent *selection_ev = (XSelectionEvent *) & ev;
@@ -1405,21 +1451,15 @@ gst_xv_image_src_update_thread (void *asrc)
     if (!outbuf)
       continue;
 
-    gst_xv_image_src_get_timeinfo (src, outbuf->buffer);
-    if (GST_CLOCK_TIME_IS_VALID (src->running_time)
-        && GST_CLOCK_TIME_IS_VALID (src->frame_duration)) {
-      if (GST_BUFFER_TIMESTAMP (outbuf->buffer) <
-          (src->running_time + src->frame_duration - 6000000)) {
-      }
-    }
-
+    GST_BUFFER_TIMESTAMP (outbuf->buffer) = ts_putstill;
+    GST_BUFFER_DURATION (outbuf->buffer) = dur_putstill;
     src->running_time = GST_BUFFER_TIMESTAMP (outbuf->buffer);
     src->frame_duration = GST_BUFFER_DURATION (outbuf->buffer);
-    g_mutex_lock (src->queue_lock);
+    g_mutex_lock (&src->queue_lock);
     g_queue_push_tail (src->queue, outbuf);
     GST_INFO ("g_queue_push_tail");
-    g_mutex_unlock (src->queue_lock);
-    g_cond_signal (src->queue_cond);
+    g_mutex_unlock (&src->queue_lock);
+    g_cond_signal (&src->queue_cond);
     GST_INFO ("g_cond_signal");
 
     if (src->virtual)
