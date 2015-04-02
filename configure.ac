@@ -432,12 +432,12 @@ AC_ARG_ENABLE(wfdrtspsrc, AC_HELP_STRING([--enable-wfdrtspsrc], [using wfdrtspsr
  [GST_TIZEN_USE_WFDRTSPSRC=yes])
 AM_CONDITIONAL(GST_TIZEN_USE_WFDRTSPSRC, test "x$GST_TIZEN_USE_WFDRTSPSRC" = "xyes")
 
-dnl if [test "x$GST_TIZEN_USE_WFDRTSPSRC" = "xyes"];
-dnl then
-dnl PKG_CHECK_MODULES(MM_WFD_COMMON, mm-scmirroring-common)
-dnl AC_SUBST(MM_WFD_COMMON_CFLAGS)
-dnl AC_SUBST(MM_WFD_COMMON_LIBS)
-dnl fi
+if [test "x$GST_TIZEN_USE_WFDRTSPSRC" = "xyes"];
+then
+PKG_CHECK_MODULES(MM_WFD_COMMON, mm-scmirroring-common)
+AC_SUBST(MM_WFD_COMMON_CFLAGS)
+AC_SUBST(MM_WFD_COMMON_LIBS)
+fi
 
 AC_OUTPUT(
 Makefile
@@ -462,7 +462,7 @@ audioeq/Makefile
 audioeq/src/Makefile
 fimcconvert/Makefile
 fimcconvert/src/Makefile
-dnl wfdrtspsrc/Makefile
-dnl wfdrtspsrc/src/Makefile
+wfdrtspsrc/Makefile
+wfdrtspsrc/src/Makefile
 )
 

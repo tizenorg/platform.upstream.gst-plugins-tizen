@@ -1098,13 +1098,13 @@ wfd_rtsp_manager_pad_probe_cb(GstPad * pad, GstPadProbeInfo *info, gpointer u_da
       GST_EVENT_TYPE_NAME(event));
 
     if (GST_EVENT_TYPE (event) == GST_EVENT_SEGMENT) {
-      GstSegment *seg = NULL;
-
       gst_event_parse_segment (event, &segment);
 
-      GST_DEBUG_OBJECT (WFD_RTSP_MANAGER (u_data), "NEWSEGMENT : %" G_GINT64_FORMAT " -- %" G_GINT64_FORMAT ", time %" G_GINT64_FORMAT " \n",
-      seg->start, seg->stop, seg->time);
-      gst_segment_free(seg);
+      if (segment) {
+        GST_DEBUG_OBJECT (WFD_RTSP_MANAGER (u_data), "NEWSEGMENT : %" G_GINT64_FORMAT " -- %" G_GINT64_FORMAT ", time %" G_GINT64_FORMAT " \n",
+                         segment->start, segment->stop, segment->time);
+        gst_segment_free(segment);
+      }
     }
   }
 

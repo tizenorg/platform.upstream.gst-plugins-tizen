@@ -45,9 +45,9 @@ endif
 #SUBDIRS += fimcconvert
 #endif
 
-#if GST_TIZEN_USE_WFDRTSPSRC
-#SUBDIRS += wfdrtspsrc
-#endif
+if GST_TIZEN_USE_WFDRTSPSRC
+SUBDIRS += wfdrtspsrc
+endif
 
 DIST_SUBDIRS = common
 
@@ -76,9 +76,9 @@ DIST_SUBDIRS += fimcconvert
 endif
 
 
-#if GST_TIZEN_USE_WFDRTSPSRC
-#DIST_SUBDIRS += wfdrtspsrc
-#endif
+if GST_TIZEN_USE_WFDRTSPSRC
+DIST_SUBDIRS += wfdrtspsrc
+endif
 
 EXTRA_DIST = \
 	gstreamer.spec gstreamer.spec.in \
