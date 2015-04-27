@@ -439,6 +439,25 @@ AC_SUBST(MM_WFD_COMMON_CFLAGS)
 AC_SUBST(MM_WFD_COMMON_LIBS)
 fi
 
+dnl use waylandsrc --------------------------------------------------------------------------
+AC_ARG_ENABLE(waylandsrc, AC_HELP_STRING([--enable-waylandsrc], [using waylandsrc]),
+[
+ case "${enableval}" in
+  yes) GST_TIZEN_USE_WAYLANDSRC=yes ;;
+  no)  GST_TIZEN_USE_WAYLANDSRC=no ;;
+  *)   AC_MSG_ERROR(bad value ${enableval} for --enable-waylandsrc) ;;
+ esac
+ ],
+ [GST_TIZEN_USE_WAYLANDSRC=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_WAYLANDSRC, test "x$GST_TIZEN_USE_WAYLANDSRC" = "xyes")
+
+if [test "x$GST_TIZEN_USE_WAYLANDSRC" = "xyes"];
+then
+PKG_CHECK_MODULES(WAYLAND_CLIENT, wayland-client)
+AC_SUBST(WAYLAND_CLIENT_CFLAGS)
+AC_SUBST(WAYLAND_CLIENT_LIBS)
+fi
+
 AC_OUTPUT(
 Makefile
 common/Makefile
@@ -464,5 +483,7 @@ fimcconvert/Makefile
 fimcconvert/src/Makefile
 wfdrtspsrc/Makefile
 wfdrtspsrc/src/Makefile
+waylandsrc/Makefile
+waylandsrc/src/Makefile
 )
 

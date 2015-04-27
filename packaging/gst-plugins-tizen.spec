@@ -27,6 +27,8 @@ BuildRequires:	pkgconfig(xv)
 BuildRequires:	pkgconfig(xdamage)
 BuildRequires:	pkgconfig(xfixes)
 BuildRequires:	pkgconfig(dri2proto)
+%else
+BuildRequires:	pkgconfig(wayland-client)
 %endif
 BuildRequires:	pkgconfig(libdrm)
 BuildRequires:	pkgconfig(libdrm_exynos)
@@ -48,6 +50,7 @@ export CFLAGS+=" -DGST_EXT_TIME_ANALYSIS -DGST_EXT_XV_ENHANCEMENT -DEXPORT_API=\
 ./autogen.sh --disable-static
 %configure \
 %if %{with x}
+	--disable-waylandsrc\
 %else
 	--disable-xvimagesrc\
 %endif
