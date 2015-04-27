@@ -49,6 +49,10 @@ if GST_TIZEN_USE_WFDRTSPSRC
 SUBDIRS += wfdrtspsrc
 endif
 
+if GST_TIZEN_USE_WAYLANDSRC
+SUBDIRS += waylandsrc
+endif
+
 DIST_SUBDIRS = common
 
 if GST_TIZEN_USE_ENCODEBIN
@@ -78,6 +82,10 @@ endif
 
 if GST_TIZEN_USE_WFDRTSPSRC
 DIST_SUBDIRS += wfdrtspsrc
+endif
+
+if GST_TIZEN_USE_WAYLANDSRC
+DIST_SUBDIRS += waylandsrc
 endif
 
 EXTRA_DIST = \
