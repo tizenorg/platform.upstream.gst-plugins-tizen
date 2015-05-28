@@ -62,7 +62,8 @@ G_BEGIN_DECLS
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <netinet/in.h>
-#include <mmf/wfdconfigmessage.h>
+#include "wfdrtspconfigmessage.h"
+#define ENABLE_WFD_MESSAGE
 
 #include "gstwfdrtspext.h"
 #include "wfdrtspmanager.h"
@@ -84,9 +85,9 @@ typedef struct _GstWFDRTSPSrc GstWFDRTSPSrc;
 typedef struct _GstWFDRTSPSrcClass GstWFDRTSPSrcClass;
 typedef struct _GstWFDRTSPSrcPrivate GstWFDRTSPSrcPrivate;
 
-#define GST_WFD_RTSP_TASK_GET_LOCK(wfd)   (GST_WFDRTSPSRC_CAST(wfd)->task_rec_lock)
-#define GST_WFD_RTSP_TASK_LOCK(wfd)       (g_rec_mutex_lock (GST_WFD_RTSP_TASK_GET_LOCK(wfd)))
-#define GST_WFD_RTSP_TASK_UNLOCK(wfd)     (g_rec_mutex_unlock (GST_WFD_RTSP_TASK_GET_LOCK(wfd)))
+#define GST_WFD_RTSP_TASK_GET_LOCK(wfd)   ((GST_WFDRTSPSRC_CAST(wfd)->task_rec_lock))
+#define GST_WFD_RTSP_TASK_LOCK(wfd)       (g_rec_mutex_lock (&(GST_WFD_RTSP_TASK_GET_LOCK(wfd))))
+#define GST_WFD_RTSP_TASK_UNLOCK(wfd)     (g_rec_mutex_unlock (&(GST_WFD_RTSP_TASK_GET_LOCK(wfd))))
 
 /**
  * GstWFDRTSPNatMethod:
@@ -103,6 +104,7 @@ typedef enum
 
 typedef enum
 {
+  WFD_PARAM_NONE,
   WFD_ROUTE,
   WFD_CONNECTOR_TYPE,
   WFD_STANDBY,
@@ -119,10 +121,11 @@ struct _GstWFDRTSPSrc {
 
   /* task and mutex */
   GstTask         *task;
-  GRecMutex *task_rec_lock;
+  GRecMutex task_rec_lock;
   gint             loop_cmd;
   gboolean         waiting;
   gboolean do_stop;
+  GstWFDParam wfd_param;
 
   /* properties */
   GstRTSPLowerTrans protocols;
@@ -171,6 +174,10 @@ struct _GstWFDRTSPSrc {
   guint audio_frequency;
 
   gboolean is_paused;
+#ifdef ENABLE_WFD_MESSAGE
+  void *message_handle;
+  gboolean extended_wfd_message_support;
+#endif
 };
 
 struct _GstWFDRTSPSrcClass {
@@ -178,6 +185,7 @@ struct _GstWFDRTSPSrcClass {
 
   /* signals */
   void     (*update_media_info)       (GstWFDRTSPSrc *src, GstStructure * str);
+  void     (*change_av_format)       (GstWFDRTSPSrc *src, gpointer *need_to_flush);
 };
 
 GType gst_wfdrtspsrc_get_type(void);

@@ -45,8 +45,12 @@ endif
 #SUBDIRS += fimcconvert
 #endif
 
-if GST_TIZEN_USE_WFDRTSPSRC
-SUBDIRS += wfdrtspsrc
+if GST_TIZEN_USE_WFDMANAGER
+SUBDIRS += wfdmanager
+endif
+
+if GST_TIZEN_USE_WFDTSDEMUX
+SUBDIRS += wfdtsdemux
 endif
 
 if GST_TIZEN_USE_WAYLANDSRC
@@ -80,8 +84,12 @@ DIST_SUBDIRS += fimcconvert
 endif
 
 
-if GST_TIZEN_USE_WFDRTSPSRC
-DIST_SUBDIRS += wfdrtspsrc
+if GST_TIZEN_USE_WFDMANAGER
+DIST_SUBDIRS += wfdmanager
+endif
+
+if GST_TIZEN_USE_WFDTSDEMUX
+DIST_SUBDIRS += wfdtsdemux
 endif
 
 if GST_TIZEN_USE_WAYLANDSRC

@@ -35,7 +35,6 @@ BuildRequires:	pkgconfig(libdrm_exynos)
 BuildRequires:  pkgconfig(libtbm)
 BuildRequires:	libdrm-devel
 BuildRequires:  pkgconfig(vconf)
-BuildRequires:  pkgconfig(mm-scmirroring-common)
 
 %description
 GStreamer tizen plugins (common)

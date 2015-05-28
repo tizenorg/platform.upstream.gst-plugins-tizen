@@ -93,7 +93,7 @@ enum
 #define DEFAULT_DO_RTCP          TRUE
 #define DEFAULT_LATENCY_MS       2000
 #define DEFAULT_UDP_BUFFER_SIZE  0x80000
-#define DEFAULT_UDP_TIMEOUT          5000000
+#define DEFAULT_UDP_TIMEOUT          10000000
 
 
 G_DEFINE_TYPE (WFDRTSPManager, wfd_rtsp_manager, G_TYPE_OBJECT);
@@ -287,8 +287,7 @@ wfd_rtsp_manager_init (WFDRTSPManager * manager)
   gst_structure_set (s, "clock-rate", G_TYPE_INT, 90000, NULL);
   gst_structure_set (s, "encoding-params", G_TYPE_STRING, "MP2T-ES", NULL);
 
-  manager->state_rec_lock = g_new (GStaticRecMutex, 1);
-  g_static_rec_mutex_init (manager->state_rec_lock);
+  g_rec_mutex_init (&(manager->state_rec_lock));
 
   manager->protocol = GST_RTSP_LOWER_TRANS_UDP;
 }
@@ -342,11 +341,11 @@ wfd_rtsp_manager_finalize (GObject * object)
     gst_object_unref (manager->session);
     manager->session = NULL;
   }
-  if (manager->jitterbuffer) {
-    gst_element_set_state (manager->jitterbuffer, GST_STATE_NULL);
-    gst_bin_remove (GST_BIN_CAST (manager->wfdrtspsrc), manager->jitterbuffer);
-    gst_object_unref (manager->jitterbuffer);
-    manager->jitterbuffer = NULL;
+  if (manager->wfdrtpbuffer) {
+    gst_element_set_state (manager->wfdrtpbuffer, GST_STATE_NULL);
+    gst_bin_remove (GST_BIN_CAST (manager->wfdrtspsrc), manager->wfdrtpbuffer);
+    gst_object_unref (manager->wfdrtpbuffer);
+    manager->wfdrtpbuffer = NULL;
   }
   if (manager->fakesrc) {
     gst_element_set_state (manager->fakesrc, GST_STATE_NULL);
@@ -363,8 +362,7 @@ wfd_rtsp_manager_finalize (GObject * object)
     gst_object_unref (manager->rtcppad);
     manager->rtcppad = NULL;
   }
-  g_static_rec_mutex_free (manager->state_rec_lock);
-  g_free (manager->state_rec_lock);
+  g_rec_mutex_clear (&(manager->state_rec_lock));
 
   G_OBJECT_CLASS (wfd_rtsp_manager_parent_class)->finalize (object);
 }
@@ -603,6 +601,8 @@ wfd_rtsp_manager_configure_udp (WFDRTSPManager *manager, gint rtpport, gint rtcp
      * if we can. */
     g_object_set (G_OBJECT (manager->udpsrc[0]), "timeout", manager->udp_timeout,
         NULL);
+    g_object_set (G_OBJECT (manager->udpsrc[0]), "do-timestamp", FALSE, NULL);
+    g_object_set (G_OBJECT (manager->udpsrc[0]), "buffer-size", 512000, NULL);
 
     GST_DEBUG_OBJECT (manager, "got outpad from udpsrc");
     /* get output pad of the UDP source. */
@@ -886,7 +886,7 @@ on_ssrc_active (GObject * session, GObject * source, WFDRTSPManager * manager)
 
 
 static GstCaps *
-request_pt_map_for_jitterbuffer (GstElement * jitterbuffer, guint pt, WFDRTSPManager * manager)
+request_pt_map_for_wfdrtpbuffer (GstElement * wfdrtpbuffer, guint pt, WFDRTSPManager * manager)
 {
   GstCaps *caps;
 
@@ -970,12 +970,12 @@ wfd_rtsp_manager_set_manager (WFDRTSPManager * manager)
     g_object_set (G_OBJECT(manager->session), "rtcp-min-interval", (guint64)1000000000, NULL);
   }
 
-  if (manager->jitterbuffer != NULL) {
+  if (manager->wfdrtpbuffer != NULL) {
     /* configure latency and packet lost */
-    g_object_set (manager->jitterbuffer, "latency", manager->latency, NULL);
+    g_object_set (manager->wfdrtpbuffer, "latency", manager->latency, NULL);
 
-    g_signal_connect (manager->jitterbuffer, "request-pt-map",
-	 (GCallback) request_pt_map_for_jitterbuffer, manager);
+    g_signal_connect (manager->wfdrtpbuffer, "request-pt-map",
+	 (GCallback) request_pt_map_for_wfdrtpbuffer, manager);
   }
 
   return TRUE;
@@ -1043,6 +1043,97 @@ no_manager:
   }
 }
 
+static gboolean
+wfd_rtsp_manager_push_event (WFDRTSPManager * manager, GstEvent * event, gboolean source)
+{
+  gboolean res = TRUE;
+
+  /* only wfdrtspsrcs that have a connection to the outside world */
+  if (manager->srcpad == NULL)
+    goto done;
+
+  if (source && manager->udpsrc[0]) {
+    gst_event_ref (event);
+    res = gst_element_send_event (manager->udpsrc[0], event);
+  } else if (manager->channelpad[0]) {
+    gst_event_ref (event);
+    if (GST_PAD_IS_SRC (manager->channelpad[0]))
+      res = gst_pad_push_event (manager->channelpad[0], event);
+    else
+      res = gst_pad_send_event (manager->channelpad[0], event);
+  }
+
+done:
+  gst_event_unref (event);
+
+  return res;
+}
+
+/*static*/ void
+wfd_rtsp_manager_flush (WFDRTSPManager * manager, gboolean flush)
+{
+  GstEvent *event = NULL;
+  GstClock *clock = NULL;
+  GstClockTime base_time = GST_CLOCK_TIME_NONE;
+  gint i;
+
+  if (flush) {
+    event = gst_event_new_flush_start ();
+    GST_DEBUG_OBJECT(manager, "start flush");
+   } else {
+    event = gst_event_new_flush_stop (TRUE);
+    GST_DEBUG_OBJECT(manager, "stop flush");
+    clock = gst_element_get_clock (GST_ELEMENT_CAST (manager->wfdrtspsrc));
+    if (clock) {
+      base_time = gst_clock_get_time (clock);
+      gst_object_unref (clock);
+    }
+  }
+
+  if(flush) {
+    GST_DEBUG_OBJECT (manager, "need to pause udpsrc");
+
+    for (i=0; i<1; i++) {
+      if (manager->udpsrc[i]) {
+        gst_element_set_locked_state (manager->udpsrc[i], TRUE);
+        gst_element_set_state (manager->udpsrc[i], GST_STATE_PAUSED);
+      }
+    }
+  }
+
+  wfd_rtsp_manager_push_event (manager, event, FALSE);
+
+  if (manager->session)
+    gst_element_set_base_time (GST_ELEMENT_CAST (manager->session), base_time);
+  if (manager->requester)
+    gst_element_set_base_time (GST_ELEMENT_CAST (manager->requester), base_time);
+  if (manager->wfdrtpbuffer)
+    gst_element_set_base_time (GST_ELEMENT_CAST (manager->wfdrtpbuffer), base_time);
+
+  /* make running time start start at 0 again */
+  for (i = 0; i < 1; i++) {
+    if (manager->udpsrc[i]) {
+      if (base_time != GST_CLOCK_TIME_NONE)
+        gst_element_set_base_time (manager->udpsrc[i], base_time);
+    }
+  }
+
+  /* for tcp interleaved case */
+  if (base_time != GST_CLOCK_TIME_NONE)
+    gst_element_set_base_time (GST_ELEMENT_CAST (manager->wfdrtspsrc), base_time);
+
+  if(!flush) {
+    GST_DEBUG_OBJECT (manager, "need to run udpsrc");
+
+    for (i=0; i<1; i++) {
+      if (manager->udpsrc[i]) {
+        gst_element_set_locked_state (manager->udpsrc[i], FALSE);
+        gst_element_set_state (manager->udpsrc[i], GST_STATE_PLAYING);
+      }
+    }
+  }
+}
+
 GstPadProbeReturn
 //wfd_rtsp_manager_pad_probe_cb(GstPad * pad, GstMiniObject * object, gpointer u_data)
 wfd_rtsp_manager_pad_probe_cb(GstPad * pad, GstPadProbeInfo *info, gpointer u_data)
@@ -1103,7 +1194,6 @@ wfd_rtsp_manager_pad_probe_cb(GstPad * pad, GstPadProbeInfo *info, gpointer u_da
       if (segment) {
         GST_DEBUG_OBJECT (WFD_RTSP_MANAGER (u_data), "NEWSEGMENT : %" G_GINT64_FORMAT " -- %" G_GINT64_FORMAT ", time %" G_GINT64_FORMAT " \n",
                          segment->start, segment->stop, segment->time);
-        gst_segment_free(segment);
       }
     }
   }
@@ -1169,11 +1259,11 @@ void wfd_rtsp_manager_enable_pad_probe(WFDRTSPManager * manager)
   }
 #endif
 
-  if(manager->jitterbuffer) {
-    pad = gst_element_get_static_pad(manager->jitterbuffer, "sink");
+  if(manager->wfdrtpbuffer) {
+    pad = gst_element_get_static_pad(manager->wfdrtpbuffer, "sink");
     if (pad) {
       if( gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_DATA_DOWNSTREAM, wfd_rtsp_manager_pad_probe_cb, (gpointer)manager, NULL)) {
-        GST_DEBUG_OBJECT (manager, "added pad probe (pad : %s, element : %s)", gst_pad_get_name(pad), gst_element_get_name(manager->jitterbuffer));
+        GST_DEBUG_OBJECT (manager, "added pad probe (pad : %s, element : %s)", gst_pad_get_name(pad), gst_element_get_name(manager->wfdrtpbuffer));
       }
       gst_object_unref (pad);
       pad = NULL;

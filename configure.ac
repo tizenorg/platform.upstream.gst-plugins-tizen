@@ -420,24 +420,29 @@ AC_ARG_ENABLE(fimcconvert, AC_HELP_STRING([--enable-fimcconvert], [using fimccon
  [GST_TIZEN_USE_FIMCCONVERT=yes])
 AM_CONDITIONAL(GST_TIZEN_USE_FIMCCONVERT, test "x$GST_TIZEN_USE_FIMCCONVERT" = "xyes")
 
-dnl use wfdrtspsrc --------------------------------------------------------------------------
-AC_ARG_ENABLE(wfdrtspsrc, AC_HELP_STRING([--enable-wfdrtspsrc], [using wfdrtspsrc]),
+dnl use wfdmanager --------------------------------------------------------------------------
+AC_ARG_ENABLE(wfdmanager, AC_HELP_STRING([--enable-wfdmanager], [using wfdmanager]),
 [
  case "${enableval}" in
-  yes) GST_TIZEN_USE_WFDRTSPSRC=yes ;;
-  no)  GST_TIZEN_USE_WFDRTSPSRC=no ;;
-  *)   AC_MSG_ERROR(bad value ${enableval} for --enable-wfdrtspsrc) ;;
+  yes) GST_TIZEN_USE_WFDMANAGER=yes ;;
+  no)  GST_TIZEN_USE_WFDMANAGER=no ;;
+  *)   AC_MSG_ERROR(bad value ${enableval} for --enable-wfdmanager) ;;
  esac
  ],
- [GST_TIZEN_USE_WFDRTSPSRC=yes])
-AM_CONDITIONAL(GST_TIZEN_USE_WFDRTSPSRC, test "x$GST_TIZEN_USE_WFDRTSPSRC" = "xyes")
+ [GST_TIZEN_USE_WFDMANAGER=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_WFDMANAGER, test "x$GST_TIZEN_USE_WFDMANAGER" = "xyes")
 
-if [test "x$GST_TIZEN_USE_WFDRTSPSRC" = "xyes"];
-then
-PKG_CHECK_MODULES(MM_WFD_COMMON, mm-scmirroring-common)
-AC_SUBST(MM_WFD_COMMON_CFLAGS)
-AC_SUBST(MM_WFD_COMMON_LIBS)
-fi
+dnl use wfdtsdemux --------------------------------------------------------------------------
+AC_ARG_ENABLE(wfdtsdemux, AC_HELP_STRING([--enable-wfdtsdemux], [using wfdtsdemux]),
+[
+ case "${enableval}" in
+  yes) GST_TIZEN_USE_WFDTSDEMUX=yes ;;
+  no)  GST_TIZEN_USE_WFDTSDEMUX=no ;;
+  *)   AC_MSG_ERROR(bad value ${enableval} for --enable-wfdtsdemux) ;;
+ esac
+ ],
+ [GST_TIZEN_USE_WFDTSDEMUX=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_WFDTSDEMUX, test "x$GST_TIZEN_USE_WFDTSDEMUX" = "xyes")
 
 dnl use waylandsrc --------------------------------------------------------------------------
 AC_ARG_ENABLE(waylandsrc, AC_HELP_STRING([--enable-waylandsrc], [using waylandsrc]),
@@ -481,9 +486,9 @@ audioeq/Makefile
 audioeq/src/Makefile
 fimcconvert/Makefile
 fimcconvert/src/Makefile
-wfdrtspsrc/Makefile
-wfdrtspsrc/src/Makefile
+wfdmanager/Makefile
+wfdmanager/src/Makefile
+wfdtsdemux/Makefile
 waylandsrc/Makefile
 waylandsrc/src/Makefile
 )
-

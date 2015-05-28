@@ -87,11 +87,11 @@
 #include <locale.h>
 #include <stdio.h>
 #include <stdarg.h>
-#include <vconf/vconf.h>
 #include <arpa/inet.h>
 #include <dlfcn.h>
 
 #include "gstwfdrtspsrc.h"
+#include "wfdrtspmacro.h"
 
 #ifdef G_OS_WIN32
 #include <winsock2.h>
@@ -111,6 +111,7 @@ GST_STATIC_PAD_TEMPLATE ("src",
 enum
 {
   SIGNAL_UPDATE_MEDIA_INFO,
+  SIGNAL_AV_FORMAT_CHANGE,
   LAST_SIGNAL
 };
 
@@ -158,7 +159,7 @@ gst_wfd_rtsp_nat_method_get_type (void)
 #define DEFAULT_DO_RTCP          TRUE
 #define DEFAULT_LATENCY_MS       2000
 #define DEFAULT_UDP_BUFFER_SIZE  0x80000
-#define DEFAULT_UDP_TIMEOUT          5000000
+#define DEFAULT_UDP_TIMEOUT          10000000
 
 enum
 {
@@ -193,6 +194,7 @@ enum
 #define CMD_CLOSE	3
 #define CMD_WAIT	4
 #define CMD_LOOP	5
+#define CMD_SET_PARAM	6
 
 #define GST_ELEMENT_PROGRESS(el, type, code, text)      \
 G_STMT_START {                                          \
@@ -264,6 +266,40 @@ static void gst_wfdrtspsrc_connection_flush (GstWFDRTSPSrc * src, gboolean flush
 
 static GstRTSPResult gst_wfdrtspsrc_get_video_parameter(GstWFDRTSPSrc * src, WFDMessage *msg);
 static GstRTSPResult gst_wfdrtspsrc_get_audio_parameter(GstWFDRTSPSrc * src, WFDMessage *msg);
+
+#ifdef ENABLE_WFD_MESSAGE
+
+void __wfd_config_message_init(GstWFDRTSPSrc * src)
+{
+  src->message_handle = dlopen(WFD_MESSAGE_FEATURES_PATH, RTLD_LAZY);
+  if (src->message_handle == NULL)
+  {
+    GST_ERROR("failed to init __wfd_config_message_init");
+    src->extended_wfd_message_support = FALSE;
+  }
+  else
+  {
+    src->extended_wfd_message_support = TRUE;
+  }
+  return;
+}
+
+void *
+__wfd_config_message_func(GstWFDRTSPSrc *src, const char *func)
+{
+  return dlsym(src->message_handle, func);
+}
+
+void
+__wfd_config_message_close(GstWFDRTSPSrc *src)
+{
+  GST_DEBUG("close wfd cofig message");
+
+  dlclose(src->message_handle);
+  src->message_handle = NULL;
+  src->extended_wfd_message_support = FALSE;
+}
+#endif
 
 static gboolean
 gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * event);
@@ -404,9 +440,15 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
               FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_wfdrtspsrc_signals[SIGNAL_UPDATE_MEDIA_INFO] =
-      g_signal_new ("receive-M4-request", G_TYPE_FROM_CLASS (gobject_class),
+      g_signal_new ("update-media-info", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (GstWFDRTSPSrcClass, update_media_info),
       NULL, NULL, g_cclosure_marshal_VOID__OBJECT, G_TYPE_NONE, 1, GST_TYPE_STRUCTURE);
+
+  gst_wfdrtspsrc_signals[SIGNAL_AV_FORMAT_CHANGE] =
+      g_signal_new ("change-av-format", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (GstWFDRTSPSrcClass, change_av_format),
+      NULL, NULL, g_cclosure_marshal_VOID__POINTER, G_TYPE_NONE, 1, G_TYPE_POINTER);
+
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_wfdrtspsrc_src_template));
 
@@ -493,9 +535,12 @@ gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
   src->audio_param = NULL;
   src->video_param = NULL;
   src->hdcp_param = NULL;
-
+  src->wfd_param = WFD_PARAM_NONE;
   src->audio_param = gst_wfd_rtsp_set_default_audio_param ();
   src->video_param = gst_wfd_rtsp_set_default_video_param ();
+#ifdef ENABLE_WFD_MESSAGE
+  __wfd_config_message_init(src);
+#endif
 
   /* get a list of all extensions */
   src->extensions = gst_wfd_rtsp_ext_list_get ();
@@ -505,11 +550,14 @@ gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
       (GCallback) gst_wfdrtspsrc_send_cb, src);
 
   /* init lock */
-  src->task_rec_lock = g_new (GRecMutex, 1);
-  g_rec_mutex_init (src->task_rec_lock);
+  g_rec_mutex_init (&(src->task_rec_lock));
 
   /* create manager */
   src->manager = wfd_rtsp_manager_new (GST_ELEMENT_CAST(src));
+  if (G_UNLIKELY (src->manager == NULL)) {
+    GST_ERROR_OBJECT (src, "could not create wfdrtspmanager element");
+    return;
+  }
 
   /* construct wfdrtspsrc */
   src->manager->session = gst_element_factory_make ("rtpsession", "wfdrtspsrc_session");
@@ -532,14 +580,14 @@ gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
       src->manager->requester);
 #endif
 
-  src->manager->jitterbuffer = gst_element_factory_make ("rtpjitterbuffer", "wfdrtspsrc_jitterbuffer");
-  if (G_UNLIKELY (src->manager->jitterbuffer == NULL)) {
-    GST_ERROR_OBJECT (src, "could not create gstrtpjitterbuffer element");
+  src->manager->wfdrtpbuffer = gst_element_factory_make ("wfdrtpbuffer", "wfdrtspsrc_wfdrtpbuffer");
+  if (G_UNLIKELY (src->manager->wfdrtpbuffer == NULL)) {
+    GST_ERROR_OBJECT (src, "could not create wfdrtpbuffer element");
     return;
   }
 
   GST_BIN_CLASS (parent_class)->add_element (GST_BIN_CAST (src),
-      src->manager->jitterbuffer);
+      src->manager->wfdrtpbuffer);
 
   src->manager->channelpad[0] = gst_element_get_request_pad (src->manager->session, "recv_rtp_sink");
   if (G_UNLIKELY (src->manager->channelpad[0]  == NULL)) {
@@ -553,14 +601,14 @@ gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
     return;
   }
 
-  //if (!gst_element_link_many(src->manager->session, src->manager->requester, src->manager->jitterbuffer, NULL)) {
-  if (!gst_element_link_many(src->manager->session, src->manager->jitterbuffer, NULL)) {
+  //if (!gst_element_link_many(src->manager->session, src->manager->requester, src->manager->wfdrtpbuffer, NULL)) {
+  if (!gst_element_link_many(src->manager->session, src->manager->wfdrtpbuffer, NULL)) {
     GST_ERROR_OBJECT (src, "failed to link elements for wfdrtspsrc");
     return;
   }
 
   /* create ghost pad for using src pad */
-  outpad = gst_element_get_static_pad (src->manager->jitterbuffer, "src");
+  outpad = gst_element_get_static_pad (src->manager->wfdrtpbuffer, "src");
   template = gst_static_pad_template_get (&gst_wfdrtspsrc_src_template);
   src->manager->srcpad = gst_ghost_pad_new_from_template ("src", outpad, template);
   gst_object_unref (template);
@@ -598,10 +646,10 @@ gst_wfdrtspsrc_dispose (GObject * object)
     manager->requester = NULL;
   }
 #endif
-  if (manager->jitterbuffer != NULL) {
+  if (manager->wfdrtpbuffer != NULL) {
      GST_BIN_CLASS (parent_class)->remove_element (GST_BIN_CAST (src),
-        manager->jitterbuffer);
-    manager->jitterbuffer = NULL;
+        manager->wfdrtpbuffer);
+    manager->wfdrtpbuffer = NULL;
   }
 
   if (manager->srcpad) {
@@ -653,10 +701,17 @@ gst_wfdrtspsrc_finalize (GObject * object)
   }
 
   /* free locks */
-  g_rec_mutex_clear (src->task_rec_lock);
-  g_free (src->task_rec_lock);
+  g_rec_mutex_clear (&(src->task_rec_lock));
 
-  g_object_unref (G_OBJECT(src->manager));
+#ifdef ENABLE_WFD_MESSAGE
+__wfd_config_message_close(src);
+#endif
+
+  if(src->manager)
+  {
+    g_object_unref (G_OBJECT(src->manager));
+	src->manager = NULL;
+  }
 #ifdef G_OS_WIN32
   WSACleanup ();
 #endif
@@ -952,18 +1007,26 @@ gst_wfdrtspsrc_connection_receive (GstWFDRTSPSrc * src, GstRTSPConnection * conn
   return ret;
 }
 
-static gboolean
-gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src, GstWFDParam param)
+static GstRTSPResult
+gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src)
 {
   GstRTSPMessage request = { 0 };
   GstRTSPMessage response = { 0 };
   GstRTSPResult res = GST_RTSP_OK;
   WFDResult wfd_res = WFD_OK;
   WFDMessage *msg_no= NULL;
-  gchar *msg;
-  gchar *ua;
+  GstWFDParam param = WFD_PARAM_NONE;
   guint msglen = 0;
-  GString *msglength;
+  GString *msglength = NULL;
+  gchar *msg = NULL;
+
+  if (src->wfd_param == WFD_PARAM_NONE) {
+    GST_ERROR_OBJECT (src, "no wfd messag to be sent...");
+    return GST_RTSP_EINVAL;
+  }
+
+  param = src->wfd_param;
+  src->wfd_param = WFD_PARAM_NONE;
 
   res = gst_rtsp_message_init_request (&request, GST_RTSP_SET_PARAMETER,
     src->conninfo.url_str);
@@ -971,15 +1034,15 @@ gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src, GstWFDParam param)
     goto error;
 
   /* Create set_parameter body to be sent in the request */
+  WFDCONFIG_MESSAGE_NEW (&msg_no, wfd_res);
 
-  wfd_res = wfdconfig_message_new (&msg_no);
   if (wfd_res != WFD_OK) {
     GST_ERROR_OBJECT (src, "Failed to create wfd message...");
     res = GST_RTSP_ERROR;
     goto error;
   }
 
-  wfd_res = wfdconfig_message_init(msg_no);
+  WFDCONFIG_MESSAGE_INIT(msg_no, wfd_res);
   if (wfd_res != WFD_OK) {
     GST_ERROR_OBJECT (src, "Failed to init wfd message...");
     res = GST_RTSP_ERROR;
@@ -989,7 +1052,7 @@ gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src, GstWFDParam param)
   switch(param) {
 
     case WFD_ROUTE: {
-      wfd_res = wfdconfig_set_audio_sink_type(msg_no,WFD_SECONDARY_SINK);
+      WFDCONFIG_SET_AUDIO_SINK_TYPE(msg_no, WFD_SECONDARY_SINK, wfd_res);
       if (wfd_res != WFD_OK) {
         GST_ERROR_OBJECT (src, "Failed to set audio sink type...");
         res = GST_RTSP_ERROR;
@@ -999,7 +1062,7 @@ gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src, GstWFDParam param)
     }
 
     case WFD_CONNECTOR_TYPE: {
-      wfd_res = wfdconfig_set_connector_type(msg_no,WFD_CONNECTOR_VGA);
+      WFDCONFIG_SET_CONNECTOR_TYPE(msg_no, WFD_CONNECTOR_VGA, wfd_res);
       if (wfd_res != WFD_OK) {
         GST_ERROR_OBJECT (src, "Failed to set connector type...");
         res = GST_RTSP_ERROR;
@@ -1009,7 +1072,7 @@ gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src, GstWFDParam param)
     }
 
     case WFD_STANDBY: {
-      wfd_res = wfdconfig_set_standby(msg_no,TRUE);
+      WFDCONFIG_SET_STANDBY(msg_no, TRUE, wfd_res);
       if (wfd_res != WFD_OK) {
         GST_ERROR_OBJECT (src, "Failed to set standby...");
         res = GST_RTSP_ERROR;
@@ -1019,7 +1082,7 @@ gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src, GstWFDParam param)
     }
 
     case WFD_IDR_REQUEST: {
-      wfd_res = wfdconfig_set_idr_request(msg_no);
+      WFDCONFIG_SET_IDR_REQUESTER(msg_no, wfd_res);
       if (wfd_res != WFD_OK) {
         GST_ERROR_OBJECT (src, "Failed to set IDR request...");
         res = GST_RTSP_ERROR;
@@ -1029,7 +1092,7 @@ gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src, GstWFDParam param)
     }
 
     case WFD_UIBC_CAPABILITY: {
-      wfd_res = wfdconfig_set_uibc_capability(msg_no, WFD_UIBC_INPUT_CAT_UNKNOWN, 0, NULL, 0, 0);
+      WFDCONFIG_SET_UIBC_CAPABILITY(msg_no, WFD_UIBC_INPUT_CAT_UNKNOWN, 0, NULL, 0, 0, wfd_res);
       if (wfd_res != WFD_OK) {
         GST_ERROR_OBJECT (src, "Failed to set UIBC capability...");
         res = GST_RTSP_ERROR;
@@ -1039,7 +1102,7 @@ gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src, GstWFDParam param)
     }
 
     case WFD_UIBC_SETTING: {
-      wfd_res = wfdconfig_set_uibc_status(msg_no, TRUE);
+      WFDCONFIG_SET_UIBC_STATUS(msg_no, TRUE, wfd_res);
       if (wfd_res != WFD_OK) {
         GST_ERROR_OBJECT (src, "Failed to set UIBC setting...");
         res = GST_RTSP_ERROR;
@@ -1048,25 +1111,20 @@ gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src, GstWFDParam param)
       break;
     }
 
-    default: {
+    default:
       GST_ERROR_OBJECT (src, "Unhandled WFD message type...");
-      if(msg_no)
-        wfdconfig_message_free(msg_no);
-        msg_no = NULL;
-      gst_rtsp_message_unset (&request);
-      gst_rtsp_message_unset (&response);
-      return GST_RTSP_EINVAL;
-    }
+      goto error;
+      break;
   }
 
-  wfd_res = wfdconfig_message_dump(msg_no);
+  WFDCONFIG_MESSAGE_DUMP(msg_no, wfd_res);
   if (wfd_res != WFD_OK) {
     GST_ERROR_OBJECT (src, "Failed to dump wfd message...");
     res = GST_RTSP_ERROR;
     goto error;
   }
 
-  msg = wfdconfig_message_as_text(msg_no);
+  WFDCONFIG_MESSAGE_AS_TEXT(msg_no, msg);
   if (msg == NULL) {
     GST_ERROR_OBJECT (src, "Failed to get wfd message as text...");
     res = GST_RTSP_ERROR;
@@ -1077,10 +1135,7 @@ gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src, GstWFDParam param)
   msglength = g_string_new ("");
   g_string_append_printf (msglength,"%d",msglen);
 
-  ua = g_strdup (src->user_agent);
-  res = gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, ua);
-  if (ua)
-    g_free(ua);
+  res = gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
 
   GST_DEBUG ("WFD message body: %s", msg);
   /* add content-length type */
@@ -1097,29 +1152,27 @@ gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src, GstWFDParam param)
     goto error;
   }
 
-  wfdconfig_message_free(msg_no);
-  msg_no = NULL;
+  WFDCONFIG_MESSAGE_FREE(msg_no);
 
-  /* send SET_PARAM */
-  GST_DEBUG_OBJECT (src, "send SET_PARAM...");
-
-  if (gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response,
-      NULL) < 0)
+  /* send request message  */
+  GST_DEBUG_OBJECT (src, "send reuest...");
+  if ((res = gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response,
+      NULL)) < 0)
     goto error;
 
   if (src->debug)
     wfd_rtsp_manager_message_dump (&response);
 
-  return TRUE;
+  return res;
 
 /* ERRORS */
 error:
  {
     if(msg_no)
-      wfdconfig_message_free(msg_no);
+      WFDCONFIG_MESSAGE_FREE(msg_no);
     gst_rtsp_message_unset (&request);
     gst_rtsp_message_unset (&response);
-    return FALSE;
+    return res;
  }
 }
 
@@ -1149,9 +1202,10 @@ gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * eve
       break;
     case GST_EVENT_CUSTOM_UPSTREAM:
       s = gst_event_get_structure (event);
-      if (gst_structure_has_name (s, "WFD_FORCE_IDR")) {
+      if (gst_structure_has_name (s, "GstWFDIDRRequest")) {
         /* Send IDR request */
-        res = gst_wfdrtspsrc_prepare_set_param(src, WFD_IDR_REQUEST);
+	 src->wfd_param = WFD_IDR_REQUEST;
+	 gst_wfdrtspsrc_loop_send_cmd(src, CMD_SET_PARAM);
       }
       break;
     default:
@@ -1515,13 +1569,12 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
     GstRTSPMessage * request)
 {
   GstRTSPMessage response = { 0 };
-  GstRTSPResult res;
+  GstRTSPResult res = GST_RTSP_OK;
   GstRTSPMethod method;
   const gchar *uristr;
   GstRTSPVersion version;
   GstRTSPMethod options;
   gchar *str;
-  gchar *ua;
   guint8 *data;
   guint size;
 
@@ -1574,22 +1627,19 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
           g_free (options_str);
         goto send_error;
       }
-      ua = g_strdup(src->user_agent);
       gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, options_str);
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, ua);
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
       if(options_str)
         g_free (options_str);
-      if(ua)
-        g_free (ua);
       break;
     }
 
     case GST_RTSP_GET_PARAMETER:
     {
-      gchar *msg;
+      gchar *msg = NULL;
       guint msglen = 0;
-      GString *msglength;
-      WFDMessage *msg3rep;
+      GString *msglength = NULL;
+      WFDMessage *msg3rep = NULL;
       WFDResult wfd_res = WFD_OK;
 
       GST_DEBUG_OBJECT (src, "Got GET_PARAMETER request");
@@ -1599,9 +1649,7 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
         goto send_error;
 
       gst_rtsp_message_add_header (&response, GST_RTSP_HDR_CONTENT_TYPE, "text/parameters");
-
-      ua = g_strdup(src->user_agent);
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, ua);
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
 
       gst_rtsp_message_get_body (request, &data, &size);
 
@@ -1618,21 +1666,22 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
       /* Creating WFD parameters supported to send as response for
         * GET_PARAMETER request from server*/
 
-      wfdconfig_message_new(&msg3rep);
-      if(msg3rep == NULL) {
+      WFDCONFIG_MESSAGE_NEW(&msg3rep, wfd_res);
+      if(msg3rep == NULL || wfd_res != WFD_OK) {
         res = GST_RTSP_ERROR;
         goto send_error;
       }
 
-      wfd_res = wfdconfig_message_init(msg3rep);
-
-      wfd_res = wfdconfig_message_parse_buffer(data,size,msg3rep);
-
+      WFDCONFIG_MESSAGE_INIT(msg3rep, wfd_res);
+      WFDCONFIG_MESSAGE_PARSE_BUFFER(data, size, msg3rep, wfd_res);
       if(wfd_res != WFD_OK) {
         res = GST_RTSP_ERROR;
         goto send_error;
       }
-      wfdconfig_message_dump(msg3rep);
+      WFDCONFIG_MESSAGE_DUMP(msg3rep, wfd_res);
+      if (wfd_res != WFD_OK) {
+        GST_ERROR_OBJECT (src, "Failed to dump wfd message...");
+      }
 
       /* Check if the request message has "wfd_audio_codecs" in it */
       if(msg3rep->audio_codecs) {
@@ -1642,22 +1691,18 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
         guint audio_latency = 0;
         //reading audio parameters which are set from sink ini file
         if(src->audio_param != NULL) {
-          if (gst_structure_has_field (src->audio_param, "audio_codec")) {
+          if (gst_structure_has_field (src->audio_param, "audio_codec"))
             gst_structure_get_uint (src->audio_param, "audio_codec", &audio_codec);
-          }
-          if (gst_structure_has_field (src->audio_param, "audio_latency")) {
+          if (gst_structure_has_field (src->audio_param, "audio_latency"))
             gst_structure_get_uint (src->audio_param, "audio_latency", &audio_latency);
-          }
-          if (gst_structure_has_field (src->audio_param, "audio_channels")) {
+          if (gst_structure_has_field (src->audio_param, "audio_channels"))
             gst_structure_get_uint (src->audio_param, "audio_channels", &audio_channels);
-          }
-          if (gst_structure_has_field (src->audio_param, "audio_sampling_frequency")) {
+          if (gst_structure_has_field (src->audio_param, "audio_sampling_frequency"))
             gst_structure_get_uint (src->audio_param, "audio_sampling_frequency", &audio_sampling_frequency);
-          }
         }
 
-        wfd_res = wfdconfig_set_supported_audio_format(msg3rep, audio_codec,
-            audio_sampling_frequency, audio_channels, 16, audio_latency);
+        WFDCONFIG_SET_SUPPORTED_AUDIO_FORMAT(msg3rep, audio_codec,
+            audio_sampling_frequency, audio_channels, 16, audio_latency, wfd_res);
       }
 
       /* Check if the request message has "wfd_video_formats" in it */
@@ -1678,54 +1723,51 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
 
         //reading video parameters which are set from sink ini file
         if (src->video_param != NULL) {
-          if (gst_structure_has_field (src->video_param, "video_codec")) {
+          if (gst_structure_has_field (src->video_param, "video_codec"))
             gst_structure_get_uint (src->video_param, "video_codec", &video_codec);
-          }
-          if (gst_structure_has_field (src->video_param, "video_native_resolution")) {
+          if (gst_structure_has_field (src->video_param, "video_native_resolution"))
             gst_structure_get_uint (src->video_param, "video_native_resolution", &video_native_resolution);
-          }
-          if (gst_structure_has_field (src->video_param, "video_cea_support")) {
+          if (gst_structure_has_field (src->video_param, "video_cea_support"))
             gst_structure_get_uint (src->video_param, "video_cea_support", &video_cea_support);
-          }
-          if (gst_structure_has_field (src->video_param, "video_vesa_support")) {
+          if (gst_structure_has_field (src->video_param, "video_vesa_support"))
             gst_structure_get_uint (src->video_param, "video_vesa_support", &video_vesa_support);
-          }
-          if (gst_structure_has_field (src->video_param, "video_hh_support")) {
+          if (gst_structure_has_field (src->video_param, "video_hh_support"))
             gst_structure_get_uint (src->video_param, "video_hh_support", &video_hh_support);
-          }
-          if (gst_structure_has_field (src->video_param, "video_profile")) {
+          if (gst_structure_has_field (src->video_param, "video_profile"))
             gst_structure_get_uint (src->video_param, "video_profile", &video_profile);
-          }
-          if (gst_structure_has_field (src->video_param, "video_level")) {
+          if (gst_structure_has_field (src->video_param, "video_level"))
             gst_structure_get_uint (src->video_param, "video_level", &video_level);
-          }
-          if (gst_structure_has_field (src->video_param, "video_latency")) {
+          if (gst_structure_has_field (src->video_param, "video_latency"))
             gst_structure_get_uint (src->video_param, "video_latency", &video_latency);
-          }
-          if (gst_structure_has_field (src->video_param, "video_vertical_resolution")) {
+          if (gst_structure_has_field (src->video_param, "video_vertical_resolution"))
             gst_structure_get_int (src->video_param, "video_vertical_resolution", &video_vertical_resolution);
-          }
-          if (gst_structure_has_field (src->video_param, "video_horizontal_resolution")) {
+          if (gst_structure_has_field (src->video_param, "video_horizontal_resolution"))
             gst_structure_get_int (src->video_param, "video_horizontal_resolution", &video_horizontal_resolution);
-          }
-          if (gst_structure_has_field (src->video_param, "video_minimum_slicing")) {
+          if (gst_structure_has_field (src->video_param, "video_minimum_slicing"))
             gst_structure_get_int (src->video_param, "video_minimum_slicing", &video_minimum_slicing);
-          }
-          if (gst_structure_has_field (src->video_param, "video_slice_enc_param")) {
+          if (gst_structure_has_field (src->video_param, "video_slice_enc_param"))
             gst_structure_get_int (src->video_param, "video_slice_enc_param", &video_slice_enc_param);
-          }
-          if (gst_structure_has_field (src->video_param, "video_framerate_control_support")) {
+          if (gst_structure_has_field (src->video_param, "video_framerate_control_support"))
             gst_structure_get_int (src->video_param, "video_framerate_control_support", &video_framerate_control_support);
-          }
         }
 
 
-        wfd_res = wfdconfig_set_supported_video_format(msg3rep, video_codec,
-            WFD_VIDEO_CEA_RESOLUTION, video_native_resolution,
+        WFDCONFIG_SET_SUPPORTED_VIDEO_FORMAT(msg3rep,
+            video_codec,
+            WFD_VIDEO_CEA_RESOLUTION,
+            video_native_resolution,
             video_cea_support,
             video_vesa_support,
             video_hh_support,
-            video_profile, video_level, video_latency, video_vertical_resolution, video_horizontal_resolution, video_minimum_slicing, video_slice_enc_param, video_framerate_control_support);
+            video_profile,
+            video_level,
+            video_latency,
+            video_vertical_resolution,
+            video_horizontal_resolution,
+            video_minimum_slicing,
+            video_slice_enc_param,
+            video_framerate_control_support,
+            wfd_res);
       }
 
       /* Check if the request has "wfd_client_rtp_ports" in it */
@@ -1734,8 +1776,13 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
         This should be derived from gst_wfdrtspsrc_alloc_udp_ports */
         src->primary_rtpport = 19000;
         src->secondary_rtpport = 0;
-        wfd_res = wfdconfig_set_prefered_RTP_ports(msg3rep, WFD_RTSP_TRANS_RTP, WFD_RTSP_PROFILE_AVP,
-                      WFD_RTSP_LOWER_TRANS_UDP, src->primary_rtpport, src->secondary_rtpport);
+        WFDCONFIG_SET_PREFERD_RTP_PORT(msg3rep,
+                     WFD_RTSP_TRANS_RTP,
+                     WFD_RTSP_PROFILE_AVP,
+                     WFD_RTSP_LOWER_TRANS_UDP,
+                     src->primary_rtpport,
+                     src->secondary_rtpport,
+                     wfd_res);
       }
 
       if(wfd_res != WFD_OK) {
@@ -1773,8 +1820,7 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
         } else {
             GST_DEBUG_OBJECT(src, "No HDCP");
         }
-
-        wfd_res = wfdconfig_set_contentprotection_type(msg3rep, hdcp_version, (guint32)hdcp_port_no);
+        WFDCONFIG_SET_CONTPROTECTION_TYPE(msg3rep, hdcp_version, (guint32)hdcp_port_no, wfd_res);
       }
 
       if(wfd_res != WFD_OK) {
@@ -1797,14 +1843,14 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
       if(msg3rep->coupled_sink) {
         //wfd_res = wfdconfig_set_coupled_sink(msg3rep, WFD_SINK_NOT_COUPLED, NULL);
         /* To test with dummy coupled sink address */
-        wfd_res = wfdconfig_set_coupled_sink(msg3rep,WFD_SINK_COUPLED,(gchar *)"1.0.0.1:435");
+        WFDCONFIG_SET_COUPLED_SINK(msg3rep,WFD_SINK_COUPLED,(gchar *)"1.0.0.1:435", wfd_res);
       }
 
       if(wfd_res != WFD_OK) {
         res = GST_RTSP_ERROR;
         goto send_error;
       }
-      msg = wfdconfig_message_as_text(msg3rep);
+      WFDCONFIG_MESSAGE_AS_TEXT(msg3rep, msg);
 
       msglen = strlen(msg);
       msglength = g_string_new ("");
@@ -1814,19 +1860,16 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
 
       gst_rtsp_message_set_body (&response, (guint8*) msg, msglen);
 
-      wfdconfig_message_free(msg3rep);
-
-      if(ua)
-        g_free(ua);
+      WFDCONFIG_MESSAGE_FREE(msg3rep);
 
       break;
-      }
+      
+    }
 
     case GST_RTSP_SET_PARAMETER:
     {
       WFDMessage *msg = NULL;
       WFDResult wfd_res = WFD_OK;
-      gchar *url0, *url1;
 
       GST_DEBUG_OBJECT (src, "Got SET_PARAMETER request");
 
@@ -1835,64 +1878,95 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
       if (res < 0)
         goto send_error;
 
-      ua = g_strdup (src->user_agent);
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, ua);
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
 
       gst_rtsp_message_get_body (request, &data, &size);
-
-      wfdconfig_message_new(&msg);
-      if(msg == NULL) {
+      WFDCONFIG_MESSAGE_NEW(&msg, wfd_res);
+      if(msg == NULL || wfd_res != WFD_OK) {
         res = GST_RTSP_ERROR;
         goto send_error;
       }
 
-      wfd_res = wfdconfig_message_init(msg);
+      WFDCONFIG_MESSAGE_INIT(msg, wfd_res);
       if(wfd_res != WFD_OK) {
         res = GST_RTSP_ERROR;
         goto send_error;
       }
-      wfd_res = wfdconfig_message_parse_buffer(data,size,msg);
+      WFDCONFIG_MESSAGE_PARSE_BUFFER(data, size, msg, wfd_res);
       if(wfd_res != WFD_OK) {
         res = GST_RTSP_ERROR;
         goto send_error;
       }
 
-      if (g_strrstr((gchar*)data, "wfd_av_format_change_timing")) {
-        /* TODO: this is to handle Set parameter request from intel widi src */
-        GST_DEBUG_OBJECT(src, "Got Another SET_PARAM ");
-        break;
+      WFDCONFIG_MESSAGE_DUMP(msg, wfd_res);
+      if (wfd_res != WFD_OK) {
+        GST_ERROR_OBJECT (src, "Failed to dump wfd message...");
       }
+      if (msg->audio_codecs || msg->video_formats || msg->video_3d_formats) {
+        GstStructure *stream_info = NULL;
+        stream_info = gst_structure_new ("WFDStreamInfo", NULL, NULL);
 
-      if(msg->video_formats || msg->audio_codecs) {
-        GstStructure *stream_info;
-        gint num_of_stream = 0;
+        /* check audio codec */
+        if(msg->audio_codecs) {
+          gst_wfdrtspsrc_get_audio_parameter(src, msg);
 
-        wfdconfig_message_dump(msg);
-
-        if(g_strrstr((gchar*)data,"wfd_audio_codecs")) {
-            wfd_res = gst_wfdrtspsrc_get_audio_parameter(src, msg);
-            num_of_stream ++;
+          gst_structure_set (stream_info,
+              "audio_format", G_TYPE_STRING, src->audio_format,
+              "audio_channels", G_TYPE_INT, src->audio_channels,
+              "audio_rate", G_TYPE_INT, src->audio_frequency,
+              "audio_bitwidth", G_TYPE_INT, src->audio_bitwidth/16,
+              NULL);
         }
 
-        if(g_strrstr((gchar*)data,"wfd_video_formats")) {
-            wfd_res = gst_wfdrtspsrc_get_video_parameter(src, msg);
-            num_of_stream ++;
+        /* check video formats  */
+        if(msg->video_formats) {
+          gst_wfdrtspsrc_get_video_parameter(src, msg);
+
+          gst_structure_set (stream_info,
+              "video_format", G_TYPE_STRING, "H264",
+              "video_width", G_TYPE_INT, src->video_width,
+              "video_height", G_TYPE_INT, src->video_height,
+              "video_framerate", G_TYPE_INT, src->video_framerate,
+              NULL);
         }
- 
-        stream_info = gst_structure_new ("WFDStreamInfo",
-			"num_of_stream", G_TYPE_INT, num_of_stream,
-			"audio_format", G_TYPE_STRING, src->audio_format,
-			"audio_channels", G_TYPE_INT, src->audio_channels,
-			"audio_rate", G_TYPE_INT, src->audio_frequency,
-			"audio_bitwidth", G_TYPE_INT, src->audio_bitwidth/16,
-			"video_format", G_TYPE_STRING, "H264",
-			"video_width", G_TYPE_INT, src->video_width,
-			"video_height", G_TYPE_INT, src->video_height,
-			"video_framerate", G_TYPE_INT, src->video_framerate,
-			NULL);
+
+        /* check video formats  */
+        if(msg->video_3d_formats) {
+          guint count = 0;
+          count = msg->video_3d_formats->count;
+          GST_DEBUG_OBJECT (src, "got video 3d formats with %d count.", count);
+        }
+
         g_signal_emit (src, gst_wfdrtspsrc_signals[SIGNAL_UPDATE_MEDIA_INFO], 0, stream_info);
- 
-        wfd_res = wfdconfig_get_presentation_url(msg, &url0, &url1);
+      }
+
+      /* check av format change timing  */
+      if (msg->av_format_change_timing) {
+        if (src->state != GST_RTSP_STATE_PLAYING) {
+          GST_WARNING_OBJECT(src, "could not handle wfd_av_format_change_timing before session is established");
+          break;
+        } else {
+          guint64 pts=0LL, dts=0LL;
+          gboolean need_to_flush = FALSE;
+
+          pts = msg->av_format_change_timing->PTS;
+          dts = msg->av_format_change_timing->DTS;
+
+          GST_DEBUG_OBJECT(src, "change format with PTS[%lld] and DTS[%lld]", pts, dts);
+
+          g_signal_emit (src, gst_wfdrtspsrc_signals[SIGNAL_AV_FORMAT_CHANGE], 0, (gpointer)&need_to_flush);
+
+          if (need_to_flush) {
+              wfd_rtsp_manager_flush(src->manager, TRUE);
+              wfd_rtsp_manager_flush(src->manager, FALSE);
+          }
+        }
+      }
+
+      if(msg->presentation_url) {
+        gchar *url0, *url1;
+
+        WFDCONFIG_GET_PRESENTATION_URL(msg, &url0, &url1, wfd_res);
         if(wfd_res == WFD_OK) {
           g_free (src->conninfo.location);
           src->conninfo.location = g_strdup (url0);
@@ -1904,8 +1978,8 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
       }
 
       if(msg->standby) {
-        gboolean standby_enable;
-        wfd_res = wfdconfig_get_standby(msg, &standby_enable);
+        gboolean standby_enable = FALSE;
+        WFDCONFIG_GET_STANDBY(msg, &standby_enable, wfd_res);
         if(wfd_res == WFD_OK)
           GST_DEBUG("M12 server set param request STANDBY %s", standby_enable?"ENABLE":"DISABLE");
       }
@@ -1917,8 +1991,6 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
         if(wfd_res == WFD_OK)
           GST_DEBUG("M15 server set param request for UIBC %s", uibc_enable?"ENABLE":"DISABLE");
       }*/
-      if (ua)
-        g_free(ua);
       break;
     }
 
@@ -1985,17 +2057,19 @@ exit:
 
   return GST_RTSP_OK;
 
-setup_failed:
-  return GST_RTSP_ERROR;
-
   /* ERRORS */
+setup_failed:
+  {
+    gst_rtsp_message_unset (request);
+    gst_rtsp_message_unset (&response);
+    return GST_RTSP_ERROR;
+  }
 send_error:
   {
     gst_rtsp_message_unset (request);
     gst_rtsp_message_unset (&response);
     return res;
   }
-
 }
 
 /* send server keep-alive */
@@ -2380,7 +2454,7 @@ pause:
 }
 
 static const gchar *
-gst_rtsp_auth_method_to_string (GstRTSPAuthMethod method)
+gst_wfdrtspsrc_auth_method_to_string (GstRTSPAuthMethod method)
 {
   gint index = 0;
 
@@ -2642,7 +2716,7 @@ gst_wfdrtspsrc_setup_auth (GstWFDRTSPSrc * src, GstRTSPMessage * response)
      * ignore it and end up retrying later */
     if (auth_result == GST_RTSP_OK || auth_result == GST_RTSP_EINVAL) {
       GST_DEBUG_OBJECT (src, "Attempting %s authentication",
-          gst_rtsp_auth_method_to_string (method));
+          gst_wfdrtspsrc_auth_method_to_string (method));
       break;
     }
   }
@@ -2676,7 +2750,6 @@ gst_wfdrtspsrc_try_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
   GstRTSPResult res = GST_RTSP_OK;
   GstRTSPStatusCode thecode = GST_RTSP_STS_OK;
 
-again:
   gst_wfd_rtsp_ext_list_before_send (src->extensions, request);
 
   GST_DEBUG_OBJECT (src, "sending message");
@@ -3130,8 +3203,10 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
       manager->conninfo.location);
 
   /* wfd use only UDP protocol for setup */
+  /* This statement can't be FALSE
   if (!(protocols & GST_RTSP_LOWER_TRANS_UDP))
     goto no_protocols;
+  */
 
   GST_DEBUG_OBJECT (src, "protocols = 0x%x", protocols);
   /* create a string with first transport in line */
@@ -3211,7 +3286,7 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
       default:
         GST_DEBUG_OBJECT (src, "manager %p unknown transport %d", manager,
             transport.lower_transport);
-        goto setup_failed;		
+        goto setup_failed;
         break;
     }
 
@@ -3318,7 +3393,6 @@ gst_wfdrtspsrc_retrieve_wifi_parameters (GstWFDRTSPSrc * src)
   GstRTSPMessage message = { 0 };
   GstRTSPMethod method = { 0 };
   gchar *str = NULL;
-  gchar *ua = NULL;
 
   /* can't continue without a valid url */
   if (G_UNLIKELY (src->conninfo.url == NULL))
@@ -3347,18 +3421,8 @@ gst_wfdrtspsrc_retrieve_wifi_parameters (GstWFDRTSPSrc * src)
   if (res < 0)
     goto create_request_failed;
 
-  str = g_strdup ("org.wfa.wfd1.0");
-  ua = g_strdup (src->user_agent);
-
-  gst_rtsp_message_add_header (&request, GST_RTSP_HDR_REQUIRE, str);
-  gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, ua);
-
-  if(str)
-    g_free(str);
-  str = NULL;
-  if(ua)
-    g_free(ua);
-  ua = NULL;
+  gst_rtsp_message_add_header (&request, GST_RTSP_HDR_REQUIRE, "org.wfa.wfd1.0");
+  gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
 
   /* send OPTIONS */
   GST_DEBUG_OBJECT (src, "send options...");
@@ -3935,7 +3999,7 @@ gst_wfdrtspsrc_thread (GstWFDRTSPSrc * src)
   gst_wfdrtspsrc_connection_flush (src, FALSE);
 
   /* we allow these to be interrupted */
-  if (cmd == CMD_LOOP || cmd == CMD_CLOSE || cmd == CMD_PAUSE)
+  if (cmd == CMD_LOOP || cmd == CMD_PAUSE || cmd == CMD_SET_PARAM )
     src->waiting = TRUE;
   GST_OBJECT_UNLOCK (src);
 
@@ -3959,7 +4023,12 @@ gst_wfdrtspsrc_thread (GstWFDRTSPSrc * src)
     case CMD_LOOP:
       running = gst_wfdrtspsrc_loop (src);
       break;
-    default:
+     case CMD_SET_PARAM:
+      ret = gst_wfdrtspsrc_prepare_set_param (src);
+      if (ret == GST_RTSP_OK)
+        running = TRUE;
+      break;
+   default:
       break;
   }
 
@@ -3991,7 +4060,7 @@ gst_wfdrtspsrc_start (GstWFDRTSPSrc * src)
     if (src->task == NULL)
       goto task_error;
 
-    gst_task_set_lock (src->task, GST_WFD_RTSP_TASK_GET_LOCK (src));
+    gst_task_set_lock (src->task, &(GST_WFD_RTSP_TASK_GET_LOCK (src)));
   }
   GST_OBJECT_UNLOCK (src);
 
@@ -4217,15 +4286,6 @@ gst_wfdrtspsrc_uri_handler_init (gpointer g_iface, gpointer iface_data)
   iface->get_protocols = gst_wfdrtspsrc_uri_get_protocols;
   iface->get_uri = gst_wfdrtspsrc_uri_get_uri;
   iface->set_uri = gst_wfdrtspsrc_uri_set_uri;
-}
-
-static gboolean
-gst_wfdrtspsrc_plugin_init (GstPlugin *plugin)
-{
-  if (!gst_element_register (plugin, "wfdrtspsrc", GST_RANK_PRIMARY, gst_wfdrtspsrc_get_type())) {
-    return FALSE;
-  }
-  return TRUE;
 }
 
 static GstRTSPResult _get_cea_resolution_and_set_to_src(GstWFDRTSPSrc *src, WFDVideoCEAResolution Resolution)
@@ -4571,7 +4631,7 @@ gst_wfdrtspsrc_get_audio_parameter(GstWFDRTSPSrc * src, WFDMessage * msg)
   guint audio_bitwidth = 0;
   guint32 audio_latency = 0;
 
-  wfdconfig_get_prefered_audio_format (msg, &audio_format, &audio_frequency, &audio_channels, &audio_bitwidth, &audio_latency);
+  WFDCONFIG_GET_PREFERED_AUDIO_FORMAT(msg, &audio_format, &audio_frequency, &audio_channels, &audio_bitwidth, &audio_latency);
 
   src->audio_format = g_strdup(msg->audio_codecs->list->audio_format);
   if(audio_frequency == WFD_FREQ_48000)
@@ -4612,10 +4672,11 @@ gst_wfdrtspsrc_get_video_parameter(GstWFDRTSPSrc * src, WFDMessage * msg)
   guint32 cslice_enc_params = 0;
   guint cframe_rate_control = 0;
   guint cvLatency = 0;
-  wfdconfig_get_prefered_video_format(msg, &cvCodec, &cNative, &cNativeResolution,
+  WFDCONFIG_GET_PREFERED_VIDEO_FORMAT(msg, &cvCodec, &cNative, &cNativeResolution,
       &cCEAResolution, &cVESAResolution, &cHHResolution,
       &cProfile, &cLevel, &cvLatency, &cMaxHeight,
       &cMaxWidth, &cmin_slice_size, &cslice_enc_params, &cframe_rate_control);
+#if 0
   switch(cNative)
   {
     case WFD_VIDEO_CEA_RESOLUTION:
@@ -4630,16 +4691,17 @@ gst_wfdrtspsrc_get_video_parameter(GstWFDRTSPSrc * src, WFDMessage * msg)
     default:
       break;
   }
+#endif
+
+  if(cCEAResolution != WFD_CEA_UNKNOWN) {
+    _get_cea_resolution_and_set_to_src(src, cCEAResolution);
+  }
+  else if(cVESAResolution != WFD_VESA_UNKNOWN) {
+    _get_vesa_resolution_and_set_to_src(src, cVESAResolution);
+  }
+   else if(cHHResolution != WFD_HH_UNKNOWN) {
+    _get_hh_resolution_and_set_to_src(src, cHHResolution);
+  }
+
   return GST_RTSP_OK;
 }
-
-GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
-                   GST_VERSION_MINOR,
-                   wfdrtspsrc,
-                   "Wifi direct src plugin",
-                   gst_wfdrtspsrc_plugin_init,
-                   VERSION,
-                   "LGPL",
-                   "Samsung Electronics Co",
-                   "http://www.samsung.com")
-

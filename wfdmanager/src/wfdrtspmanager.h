@@ -68,8 +68,8 @@ typedef struct _WFDRTSPManagerClass WFDRTSPManagerClass;
 
 
 #define WFD_RTSP_MANAGER_STATE_GET_LOCK(manager)    (WFD_RTSP_MANAGER_CAST(manager)->state_rec_lock)
-#define WFD_RTSP_MANAGER_STATE_LOCK(manager)        (g_static_rec_mutex_lock (WFD_RTSP_MANAGER_STATE_GET_LOCK(manager)))
-#define WFD_RTSP_MANAGER_STATE_UNLOCK(manager)      (g_static_rec_mutex_unlock (WFD_RTSP_MANAGER_STATE_GET_LOCK(manager)))
+#define WFD_RTSP_MANAGER_STATE_LOCK(manager)        (g_rec_mutex_lock (&(WFD_RTSP_MANAGER_STATE_GET_LOCK(manager))))
+#define WFD_RTSP_MANAGER_STATE_UNLOCK(manager)      (g_rec_mutex_unlock(&(WFD_RTSP_MANAGER_STATE_GET_LOCK(manager))))
 
 typedef struct _GstWFDRTSPConnInfo GstWFDRTSPConnInfo;
 
@@ -91,7 +91,7 @@ struct _WFDRTSPManager {
   gboolean      eos;
   gboolean      discont;
   gboolean         need_activate;
-  GStaticRecMutex *state_rec_lock;
+  GRecMutex state_rec_lock;
 
   /* for interleaved mode */
   GstCaps      *caps;
@@ -123,7 +123,7 @@ struct _WFDRTSPManager {
   /* pipeline */
   GstElement      *requester;
   GstElement      *session;
-  GstElement      *jitterbuffer;
+  GstElement      *wfdrtpbuffer;
 
   /* properties */
   gboolean          do_rtcp;
@@ -153,6 +153,8 @@ GstRTSPResult
 wfd_rtsp_manager_message_dump (GstRTSPMessage * msg);
 void
 wfd_rtsp_manager_enable_pad_probe(WFDRTSPManager * manager);
+void
+wfd_rtsp_manager_flush (WFDRTSPManager * manager, gboolean flush);
 
 G_END_DECLS
 

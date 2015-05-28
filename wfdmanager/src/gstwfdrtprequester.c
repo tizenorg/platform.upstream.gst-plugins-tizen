@@ -62,7 +62,7 @@ GST_DEBUG_CATEGORY_STATIC (wfdrtprequester_debug);
 /* signals and args */
 enum
 {
-  SIGNAL_REQUEST_TIMEOUT,
+  SIGNAL_REQUEST_IDR,
   LAST_SIGNAL
 };
 
@@ -149,7 +149,7 @@ struct _GstWFDRTPRequestRange
  * The maximum number of missing packets we tollerate. These are packets with a
  * sequence number bigger than the last seen packet.
  */
-#define REQUESTER_MAX_DROPOUT      1024
+#define REQUESTER_MAX_DROPOUT      17
 /*
  * The maximum number of misordered packets we tollerate. These are packets with
  * a sequence number smaller than the last seen packet.
@@ -243,17 +243,17 @@ gst_wfd_rtp_requester_class_init (GstWFDRTPRequesterClass * klass)
    *
    * Notify of timeout which is requesting rtp retransmission.
    */
-  gst_wfd_rtp_requester_signals[SIGNAL_REQUEST_TIMEOUT] =
-      g_signal_new ("request-timeout", G_TYPE_FROM_CLASS (klass),
+  gst_wfd_rtp_requester_signals[SIGNAL_REQUEST_IDR] =
+      g_signal_new ("request-idr", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST,
-      G_STRUCT_OFFSET (GstWFDRTPRequesterClass, request_timeout), NULL, NULL,
+      G_STRUCT_OFFSET (GstWFDRTPRequesterClass, request_idr), NULL, NULL,
       g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
 
-  gst_element_class_set_details_simple (gstelement_class, "Request lost rtp packets",
-      "Source/Network",
-      "Request retransmition of lost rtp packets over network",
-      "Santhoshi KS <santhoshi.ks@samsung.com>");
-
+  gst_element_class_set_details_simple (gstelement_class,
+  	  "Wi-Fi Display RTP Request Retransmission Element",
+      "Filter/Network/RTP",
+      "Receive RTP packet and request RTP retransmission",
+      "Yejin Cho <cho.yejin@samsung.com>");
 
   gstelement_class->request_new_pad =
       GST_DEBUG_FUNCPTR (gst_wfd_rtp_requester_request_new_pad);
@@ -276,7 +276,7 @@ static void
 gst_wfd_rtp_requester_init (GstWFDRTPRequester * requester)
 {
   requester->priv = GST_WFD_RTP_REQUESTER_GET_PRIVATE(requester);
-  requester->priv->lock = g_mutex_new ();
+  g_mutex_init (requester->priv->lock);
   requester->priv->flushing = FALSE;
   requester->priv->next_in_seqnum = GST_CLOCK_TIME_NONE;
   requester->priv->timer = NULL;
@@ -311,7 +311,7 @@ gst_wfd_rtp_requester_finalize (GObject * object)
   requester = GST_WFD_RTP_REQUESTER (object);
 
   if (requester->priv->lock) {
-    g_mutex_free(requester->priv->lock);
+    g_mutex_clear(requester->priv->lock);
     requester->priv->lock = NULL;
   }
 
@@ -452,9 +452,13 @@ gst_wfd_rtp_requester_flush_start (GstWFDRTPRequester * requester)
 
   priv = GST_WFD_RTP_REQUESTER_GET_PRIVATE(requester);
 
+  GST_WFD_RTP_REQUESTER_LOCK(requester);
+
   /* mark ourselves as flushing */
   priv->flushing = TRUE;
   GST_DEBUG_OBJECT (requester, "flush start..");
+
+  GST_WFD_RTP_REQUESTER_UNLOCK(requester);
 }
 
 static void
@@ -464,6 +468,8 @@ gst_wfd_rtp_requester_flush_stop (GstWFDRTPRequester * requester)
   GList *walk;
 
   priv = GST_WFD_RTP_REQUESTER_GET_PRIVATE(requester);
+
+  GST_WFD_RTP_REQUESTER_LOCK(requester);
 
   GST_DEBUG_OBJECT (requester, "flush stop...");
   /* Mark as non flushing */
@@ -480,6 +486,8 @@ gst_wfd_rtp_requester_flush_stop (GstWFDRTPRequester * requester)
 
   requester->ssrc = 0;
   requester->pt = 0;
+
+  GST_WFD_RTP_REQUESTER_UNLOCK(requester);
 }
 
 static gboolean
@@ -559,7 +567,7 @@ check_timeout (gpointer *data)
       elapsed = g_timer_elapsed (priv->timer, NULL);
       if (elapsed - range->request_time > (requester->timeout_ms / 1000)) {
         GST_DEBUG_OBJECT (requester, "remove range for #%d~#%d",
-          range->start_seqnum, range->end_seqnum);
+		range->start_seqnum, range->end_seqnum);
         priv->request_ranges = g_list_remove (priv->request_ranges, range);
         is_timeout = TRUE;
       }
@@ -567,8 +575,8 @@ check_timeout (gpointer *data)
   }
 
   if (is_timeout) {
-    GST_DEBUG_OBJECT (requester, "emit timeout signal");
-    g_signal_emit (requester, gst_wfd_rtp_requester_signals[SIGNAL_REQUEST_TIMEOUT], 0);
+    GST_DEBUG_OBJECT (requester, "emit request IDR signal");
+    g_signal_emit (requester, gst_wfd_rtp_requester_signals[SIGNAL_REQUEST_IDR], 0);
   }
 
 stop:
@@ -709,14 +717,13 @@ again:
     gst_rtcp_packet_fb_set_media_ssrc (&rtcp_fb_packet, 0);
 
     /* set rtcp fb fci(feedback control information) : 32bits */
-    if (!gst_rtcp_packet_fb_set_fci_length (&rtcp_fb_packet, 2)) {
+    if (!gst_rtcp_packet_fb_set_fci_length (&rtcp_fb_packet, 1)) {
       GST_DEBUG_OBJECT (requester, "fail to set FCI length to RTCP FB packet");
       gst_rtcp_packet_remove (&rtcp_fb_packet);
       return;
     }
 
-    fci_data = gst_rtcp_packet_fb_get_fci (&rtcp_fb_packet) -
-        ((gst_rtcp_packet_fb_get_fci_length (&rtcp_fb_packet) - 2) * 4);
+    fci_data = gst_rtcp_packet_fb_get_fci ((&rtcp_fb_packet));
 
     /* set pid */
     GST_WRITE_UINT16_BE (fci_data, pid);
@@ -774,13 +781,6 @@ fail_packet:
   }
 }
 
-void
-wfd_rtp_requester_cancel_request (GstWFDRTPRequester *requester, guint16 seqnum)
-{
-  /* need to fill up */
-  GST_DEBUG_OBJECT (requester, "");
-}
-
 /* chain function
  * this function does the actual processing
  */
@@ -798,6 +798,8 @@ gst_wfd_rtp_requester_chain (GstPad * pad, GstObject *parent, GstBuffer * buf)
   requester = GST_WFD_RTP_REQUESTER (gst_pad_get_parent (pad));
   priv = GST_WFD_RTP_REQUESTER_GET_PRIVATE(requester);
 
+  GST_WFD_RTP_REQUESTER_LOCK (requester);
+
   if (priv->flushing)
     goto drop_buffer;
 
@@ -807,14 +809,13 @@ gst_wfd_rtp_requester_chain (GstPad * pad, GstObject *parent, GstBuffer * buf)
   /* check ssrc */
   ssrc = gst_rtp_buffer_get_ssrc (&rtp_buf);
   if (G_LIKELY(!requester->ssrc)) {
-      GST_DEBUG_OBJECT(requester, "set ssrc as %x using first rtp packet", ssrc);
-      requester->ssrc = ssrc;
+    GST_DEBUG_OBJECT(requester, "set ssrc as %x using first rtp packet", ssrc);
+    requester->ssrc = ssrc;
   } else if (G_LIKELY (requester->ssrc != ssrc)) {
     //goto invalid_ssrc;
     GST_ERROR_OBJECT(requester, "ssrc is changed from %x to %x", requester->ssrc, ssrc);
     requester->ssrc = ssrc;
   }
-
 
   /* check pt : pt should always 33 for MP2T-ES  */
   pt = gst_rtp_buffer_get_payload_type (&rtp_buf);
@@ -822,7 +823,6 @@ gst_wfd_rtp_requester_chain (GstPad * pad, GstObject *parent, GstBuffer * buf)
     if (G_LIKELY(!requester->pt)) {
       requester->pt = pt;
     } else {
-      gst_rtp_buffer_unmap(&rtp_buf);
       goto invalid_pt;
     }
   }
@@ -838,33 +838,41 @@ gst_wfd_rtp_requester_chain (GstPad * pad, GstObject *parent, GstBuffer * buf)
       GST_ERROR_OBJECT (requester, "expected #%d, got #%d, gap of %d", (guint16)priv->next_in_seqnum, seqnum, gap);
 
       if (requester->do_request) {
-        /* priv->next_in_seqnum >= seqnum, this packet is too late or the
-         * sender might have been restarted with different seqnum. */
         if (G_UNLIKELY (gap < 0)) {
-          GST_DEBUG_OBJECT (requester, "#%d is late", seqnum);
-          wfd_rtp_requester_cancel_request(requester, seqnum);
-          goto skip;
-        }
-        /* priv->next_in_seqnum < seqnum, this is a new packet */
-        else if (G_UNLIKELY (gap > REQUESTER_MAX_DROPOUT)) {
-          GST_DEBUG_OBJECT (requester, "reset: too many dropped packets %d",
+          if (G_UNLIKELY (gap < -150)) {
+            GST_WARNING_OBJECT (requester, "#%d is too late, just unref the buffer for prevent of resetting jitterbuffer", seqnum);
+            gst_buffer_unref (buf);
+            goto finished;
+          } else {
+            GST_DEBUG_OBJECT (requester, "#%d is late, but try to push", seqnum);
+            goto skip;
+          }
+        } else if (G_UNLIKELY (gap > REQUESTER_MAX_DROPOUT)) {
+          GST_DEBUG_OBJECT (requester, "too many dropped packets %d, need to request IDR",
               gap);
+          g_signal_emit (requester, gst_wfd_rtp_requester_signals[SIGNAL_REQUEST_IDR], 0);
         } else {
           GST_DEBUG_OBJECT (requester, "tolerable gap");
           wfd_rtp_requester_perform_request(requester, priv->next_in_seqnum, seqnum);
         }
       }
     }
+  } else {
+    GST_ERROR_OBJECT (requester," No-error : got the first buffer, need to set buffer timestamp 0");
+    GST_BUFFER_TIMESTAMP (buf) = 0;
   }
+
   priv->next_in_seqnum = (seqnum + 1) & 0xffff;
 
 skip:
-  gst_rtp_buffer_unmap(&rtp_buf);
   /* just push out the incoming buffer without touching it */
   ret = gst_pad_push (requester->rtp_src, buf);
   if (ret != GST_FLOW_OK)
-    GST_ERROR_OBJECT (requester, "fail to pad push..reason %s", gst_flow_get_name(ret));
+    GST_ERROR_OBJECT (requester, "failed to pad push..reason %s", gst_flow_get_name(ret));
 
+finished:
+  GST_WFD_RTP_REQUESTER_UNLOCK(requester);
+  gst_rtp_buffer_unmap(&rtp_buf);
   gst_object_unref (requester);
 
   return ret;
@@ -875,8 +883,8 @@ drop_buffer:
     GST_ERROR_OBJECT (requester,
         "requeseter is flushing, drop incomming buffers..");
     gst_buffer_unref (buf);
-    gst_object_unref (requester);
-    return GST_FLOW_OK;
+    ret = GST_FLOW_OK;
+    goto finished;
   }
 invalid_buffer:
   {
@@ -884,8 +892,8 @@ invalid_buffer:
     GST_ELEMENT_WARNING (requester, STREAM, DECODE, (NULL),
         ("Received invalid RTP payload, dropping"));
     gst_buffer_unref (buf);
-    gst_object_unref (requester);
-    return GST_FLOW_OK;
+    ret = GST_FLOW_OK;
+    goto finished;
   }
 invalid_ssrc:
   {
@@ -893,8 +901,8 @@ invalid_ssrc:
     GST_ELEMENT_WARNING (requester, STREAM, DECODE, (NULL),
         ("ssrc of this rtp packet is differtent from before.  dropping"));
     gst_buffer_unref (buf);
-    gst_object_unref (requester);
-    return GST_FLOW_OK;
+    ret = GST_FLOW_OK;
+    goto finished;
   }
 invalid_pt:
   {
@@ -902,8 +910,8 @@ invalid_pt:
     GST_ELEMENT_WARNING (requester, STREAM, DECODE, (NULL),
        ("pt of this rtp packet is differtent from before. dropping"));
     gst_buffer_unref (buf);
-    gst_object_unref (requester);
-    return GST_FLOW_OK;
+    ret = GST_FLOW_OK;
+    goto finished;
   }
 }
 
@@ -937,7 +945,7 @@ wfd_requester_handle_retransmitted_rtp (GstWFDRTPRequester *requester, GstBuffer
 
   rtp_buf = gst_buffer_new_and_alloc(buf_size - 2);
   if (!rtp_buf) {
-    GST_WARNING_OBJECT(requester, "fail to alloc for rtp buffer");
+    GST_WARNING_OBJECT(requester, "failed to alloc for rtp buffer");
     gst_buffer_unmap (ret_rtp_buf, &ret_buf_mapinfo);
     return NULL;
   }
@@ -959,7 +967,7 @@ wfd_requester_handle_retransmitted_rtp (GstWFDRTPRequester *requester, GstBuffer
   gst_rtp_buffer_set_seq(&rtp_res_buffer, seqnum);
   gst_rtp_buffer_unmap (&rtp_res_buffer);
 
-  GST_DEBUG_OBJECT (requester, "restored packet #%d", seqnum);
+  GST_ERROR_OBJECT (requester, "No-error: restored rtp packet #%d", seqnum);
 
   if (requester->timeout_ms>0)
     remove_range (requester, seqnum);
@@ -976,50 +984,50 @@ gst_wfd_rtp_requester_chain_retransmitted_rtp (GstPad * pad, GstObject *parent, 
   GstWFDRTPRequester *requester;
   GstWFDRTPRequesterPrivate *priv;
   GstFlowReturn ret = GST_FLOW_OK;
-  guint16 seqnum;
-  guint8 pt;
   GstBuffer *outbuf;
-  GstRTPBuffer rtp_buf = {NULL};
+  gint gap = 0;
+  gint seqnum = 0;
+  GstRTPBuffer rtp_buf = { NULL };
 
-  requester = GST_WFD_RTP_REQUESTER (gst_pad_get_parent (pad));
+  requester = GST_WFD_RTP_REQUESTER (parent);
   priv = GST_WFD_RTP_REQUESTER_GET_PRIVATE(requester);
 
   if (!requester->do_request)
     goto skip_buffer;
 
-  if (priv->flushing)
-    goto drop_buffer;
-
-  if (G_UNLIKELY (!gst_rtp_buffer_map (buf, GST_MAP_READ, &rtp_buf)))
-    goto invalid_buffer;
-
-  pt = gst_rtp_buffer_get_payload_type (&rtp_buf);
-  if (G_LIKELY (requester->pt != pt)) {
-    gst_rtp_buffer_unmap (&rtp_buf);
-    goto invalid_pt;
-  }
-
-  seqnum = gst_rtp_buffer_get_seq (&rtp_buf);
-  gst_rtp_buffer_unmap (&rtp_buf);
-
-  GST_DEBUG_OBJECT (requester, "Received packet #%d", seqnum);
-
   outbuf = wfd_requester_handle_retransmitted_rtp(requester, buf);
   if (!outbuf) {
-    GST_DEBUG_OBJECT (requester, "fail to handle retransmitted rtp packet...");
+    GST_ERROR_OBJECT (requester, "No-error: failed to handle retransmitted rtp packet...");
     return GST_FLOW_OK;
   }
 
-  ret = gst_pad_push (requester->rtp_src, outbuf);
-  if (ret <GST_FLOW_OK) {
-    GST_DEBUG_OBJECT (requester, "fail to push retransmitted rtp packe, reason %s",
-		gst_flow_get_name(ret));
+  /* check sequence of retransmitted rtp packet. */
+  if(G_UNLIKELY (priv->next_in_seqnum == GST_CLOCK_TIME_NONE)) {
+    goto skip_buffer;
   }
 
-  gst_object_unref (requester);
+  if (G_UNLIKELY (!gst_rtp_buffer_map( buf, GST_MAP_READ, &rtp_buf) )){
+	GST_ERROR_OBJECT (requester, "No-error: failed to map rtp buffer");
+	goto skip_buffer;
+  }
 
-  /* just push out the incoming buffer without touching it */
-  return ret;
+  seqnum = gst_rtp_buffer_get_seq (&rtp_buf);
+  gap = gst_rtp_buffer_compare_seqnum (priv->next_in_seqnum, seqnum);
+  if (G_UNLIKELY (gap > 0)) {
+    GST_ERROR_OBJECT (requester, "#%d is invalid sequence number, gap of %d", seqnum, gap);
+    goto skip_buffer;
+  }
+
+  ret = gst_wfd_rtp_requester_chain(requester->rtp_sink, parent, outbuf);
+  if (ret != GST_FLOW_OK)
+    GST_ERROR_OBJECT (requester, "No-error: failed to push retransmitted rtp packet...");
+
+finished:
+  gst_object_unref (requester);
+  gst_rtp_buffer_unmap(&rtp_buf);
+
+  /* just return OK */
+  return GST_FLOW_OK;
 
   /* ERRORS */
 skip_buffer:
@@ -1027,35 +1035,9 @@ skip_buffer:
     GST_DEBUG_OBJECT (requester,
         "requeseter is set to not handle retransmission, dropping");
     gst_buffer_unref (buf);
-    gst_object_unref (requester);
-    return GST_FLOW_OK;
+    goto finished;
   }
-drop_buffer:
-  {
-    GST_DEBUG_OBJECT (requester,
-        "requeseter is flushing, dropping");
-    gst_buffer_unref (buf);
-    gst_object_unref (requester);
-    return GST_FLOW_OK;
-  }
-invalid_buffer:
-  {
-    /* this is not fatal but should be filtered earlier */
-    GST_ELEMENT_WARNING (requester, STREAM, DECODE, (NULL),
-        ("Received invalid RTP payload, dropping"));
-    gst_buffer_unref (buf);
-    gst_object_unref (requester);
-    return GST_FLOW_OK;
-  }
-invalid_pt:
-  {
-    /* this is not fatal but should be filtered earlier */
-    GST_ELEMENT_WARNING (requester, STREAM, DECODE, (NULL),
-        ("pt of this rtp packet is differtent from before. dropping"));
-    gst_buffer_unref (buf);
-    gst_object_unref (requester);
-    return GST_FLOW_OK;
-  }}
+}
 
 static GstPad *
 gst_wfd_rtp_requester_request_new_pad (GstElement * element,
@@ -1162,34 +1144,3 @@ wrong_pad:
     return;
   }
 }
-
-
-/* entry point to initialize the plug-in
- * initialize the plug-in itself
- * register the element factories and other features
- */
-static gboolean
-gst_wfd_rtp_requester_plugin_init (GstPlugin *plugin)
-{
-  if (!gst_element_register (plugin, "wfdrtprequester", GST_RANK_PRIMARY, gst_wfd_rtp_requester_get_type())) {
-    return FALSE;
-  }
-  return TRUE;
-}
-
-/* gstreamer looks for this structure to register plugins
- *
- * exchange the string 'Template plugin' with your plugin description
- */
-GST_PLUGIN_DEFINE (
-    GST_VERSION_MAJOR,
-    GST_VERSION_MINOR,
-    wfdrtprequester,
-    "WFD RTP Requester plugin",
-    gst_wfd_rtp_requester_plugin_init,
-    VERSION,
-    "LGPL",
-    "GStreamer",
-    "http://gstreamer.net/"
-)
-

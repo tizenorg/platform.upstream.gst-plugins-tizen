@@ -91,7 +91,7 @@ struct _GstWFDRTPRequesterClass
   GstElementClass parent_class;
 
   /* signals */
-  void     (*request_timeout)       (GstWFDRTPRequester *requester);
+  void     (*request_idr)       (GstWFDRTPRequester *requester);
 };
 
 GType gst_wfd_rtp_requester_get_type (void);
