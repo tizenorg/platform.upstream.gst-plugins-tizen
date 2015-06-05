@@ -65,7 +65,6 @@ G_BEGIN_DECLS
 #include "wfdrtspconfigmessage.h"
 #define ENABLE_WFD_MESSAGE
 
-#include "gstwfdrtspext.h"
 #include "wfdrtspmanager.h"
 
 #define GST_TYPE_WFDRTSPSRC \
@@ -83,24 +82,10 @@ G_BEGIN_DECLS
 
 typedef struct _GstWFDRTSPSrc GstWFDRTSPSrc;
 typedef struct _GstWFDRTSPSrcClass GstWFDRTSPSrcClass;
-typedef struct _GstWFDRTSPSrcPrivate GstWFDRTSPSrcPrivate;
 
 #define GST_WFD_RTSP_TASK_GET_LOCK(wfd)   ((GST_WFDRTSPSRC_CAST(wfd)->task_rec_lock))
 #define GST_WFD_RTSP_TASK_LOCK(wfd)       (g_rec_mutex_lock (&(GST_WFD_RTSP_TASK_GET_LOCK(wfd))))
 #define GST_WFD_RTSP_TASK_UNLOCK(wfd)     (g_rec_mutex_unlock (&(GST_WFD_RTSP_TASK_GET_LOCK(wfd))))
-
-/**
- * GstWFDRTSPNatMethod:
- * @GST_WFD_RTSP_NAT_NONE: none
- * @GST_WFD_RTSP_NAT_DUMMY: send dummy packets
- *
- * Different methods for trying to traverse firewalls.
- */
-typedef enum
-{
-  GST_WFD_RTSP_NAT_NONE,
-  GST_WFD_RTSP_NAT_DUMMY
-} GstWFDRTSPNatMethod;
 
 typedef enum
 {
@@ -133,7 +118,6 @@ struct _GstWFDRTSPSrc {
   guint             retry;
   GTimeVal          tcp_timeout;
   GTimeVal         *ptcp_timeout;
-  GstWFDRTSPNatMethod  nat_method;
   gchar            *proxy_host;
   guint             proxy_port;
   gchar            *proxy_user;
@@ -153,18 +137,12 @@ struct _GstWFDRTSPSrc {
   /* state */
   GstRTSPState       state;
   gboolean           tried_url_auth;
-  gboolean           need_redirect;
 
   /* supported methods */
   gint               methods;
 
   GstWFDRTSPConnInfo  conninfo;
 
-  /* a list of RTSP extensions as GstElement */
-  GstWFDRTSPExtensionList  *extensions;
-
-
-  GTimeVal ssr_timeout;
   guint video_height;
   guint video_width;
   guint video_framerate;

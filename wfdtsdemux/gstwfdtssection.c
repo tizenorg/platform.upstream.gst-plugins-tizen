@@ -651,6 +651,10 @@ _parse_pmt (GstWFDTSSection * section)
   guint stream_info_length;
 
   pmt = g_slice_new0 (GstWFDTSPMT);
+  if(pmt == NULL) {
+    GST_ERROR("Failed to allocate memory for pmt");
+    return NULL;
+  }
 
   data = section->data;
   end = data + section->section_length;

@@ -384,12 +384,15 @@ wfd_ts_packetizer_parse_adaptation_field_control (WFDTSPacketizer *
     if (packetizer->calculate_skew
         && GST_CLOCK_TIME_IS_VALID (packetizer->last_in_time)) {
       pcrtable = get_pcr_table (packetizer, packet->pid);
-      calculate_skew (pcrtable, packet->pcr, packetizer->last_in_time);
+      if (pcrtable)
+        calculate_skew (pcrtable, packet->pcr, packetizer->last_in_time);
     }
     if (packetizer->calculate_offset) {
       if (!pcrtable)
         pcrtable = get_pcr_table (packetizer, packet->pid);
-      record_pcr (packetizer, pcrtable, packet->pcr, packet->offset);
+
+      if (pcrtable)
+        record_pcr (packetizer, pcrtable, packet->pcr, packet->offset);
     }
     PACKETIZER_GROUP_UNLOCK (packetizer);
   }
@@ -2096,6 +2099,11 @@ wfd_ts_packetizer_offset_to_ts (WFDTSPacketizer * packetizer,
   PACKETIZER_GROUP_LOCK (packetizer);
 
   pcrtable = get_pcr_table (packetizer, pid);
+  if(pcrtable == NULL) {
+    PACKETIZER_GROUP_UNLOCK (packetizer);
+    GST_WARNING ("The pcr table is null");
+    return GST_CLOCK_TIME_NONE;
+  }
 
   if (g_list_length (pcrtable->groups) < 1) {
     PACKETIZER_GROUP_UNLOCK (packetizer);
@@ -2161,6 +2169,11 @@ wfd_ts_packetizer_pts_to_ts (WFDTSPacketizer * packetizer,
 
   PACKETIZER_GROUP_LOCK (packetizer);
   pcrtable = get_pcr_table (packetizer, pcr_pid);
+  if(G_UNLIKELY(pcrtable == NULL)) {
+    PACKETIZER_GROUP_UNLOCK (packetizer);
+    GST_ERROR ("The pcr table is null");
+    return res;
+  }
 
   /* Use clock skew if present */
   if (packetizer->calculate_skew
@@ -2293,7 +2306,7 @@ wfd_ts_packetizer_ts_to_offset (WFDTSPacketizer * packetizer,
   PACKETIZER_GROUP_LOCK (packetizer);
   pcrtable = get_pcr_table (packetizer, pcr_pid);
 
-  if (pcrtable->groups == NULL) {
+  if (pcrtable == NULL || pcrtable->groups == NULL) {
     PACKETIZER_GROUP_UNLOCK (packetizer);
     return -1;
   }
