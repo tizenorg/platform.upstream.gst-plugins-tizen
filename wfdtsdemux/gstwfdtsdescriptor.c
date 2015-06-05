@@ -430,6 +430,8 @@ convert_to_utf8 (const gchar * text, gint length, guint start,
   text += start;
 
   pos = tmp = g_malloc (length * 2);
+  if(!pos)
+    return NULL;
 
   if (is_multibyte) {
     if (length == -1) {

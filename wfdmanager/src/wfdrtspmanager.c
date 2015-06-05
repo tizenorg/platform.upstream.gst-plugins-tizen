@@ -1135,53 +1135,29 @@ wfd_rtsp_manager_flush (WFDRTSPManager * manager, gboolean flush)
 }
 
 GstPadProbeReturn
-//wfd_rtsp_manager_pad_probe_cb(GstPad * pad, GstMiniObject * object, gpointer u_data)
 wfd_rtsp_manager_pad_probe_cb(GstPad * pad, GstPadProbeInfo *info, gpointer u_data)
 {
   GstElement* parent = NULL;
   const GstSegment *segment = NULL;
 
+  g_return_val_if_fail (pad, GST_PAD_PROBE_DROP);
+  g_return_val_if_fail (info, GST_PAD_PROBE_DROP);
+
   parent = (GstElement*)gst_object_get_parent(GST_OBJECT(pad));
+  if(!parent)
+    return GST_PAD_PROBE_DROP;
 
-#if 0
-  if (GST_IS_EVENT (object)) {
-    GstEvent *event = GST_EVENT_CAST(object);
-
-    /* show name and event type */
-    GST_DEBUG_OBJECT(WFD_RTSP_MANAGER (u_data), "EVENT PROBE : %s:%s :  %s\n",
-      GST_STR_NULL(GST_ELEMENT_NAME(parent)), GST_STR_NULL(GST_PAD_NAME(pad)),
-      GST_EVENT_TYPE_NAME(event));
-
-    if (GST_EVENT_TYPE (event) == GST_EVENT_SEGMENT) {
-      GstSegment *seg = NULL;
-
-      gst_event_parse_segment (event, &segment);
-
-      GST_DEBUG_OBJECT (WFD_RTSP_MANAGER (u_data), "NEWSEGMENT : %" G_GINT64_FORMAT " -- %" G_GINT64_FORMAT ", time %" G_GINT64_FORMAT " \n",
-      seg->start, seg->stop, seg->time);
-      gst_segment_free(seg);
-    }
-  }
-  else if  (GST_IS_BUFFER(object)) {
-    GstBuffer *buffer = GST_BUFFER_CAST(object);
-
-    /* show name and timestamp */
-    GST_DEBUG_OBJECT(WFD_RTSP_MANAGER (u_data), "BUFFER PROBE : %s:%s :  %u:%02u:%02u.%09u  (%d bytes)\n",
-        GST_STR_NULL(GST_ELEMENT_NAME(parent)), GST_STR_NULL(GST_PAD_NAME(pad)),
-        GST_TIME_ARGS(GST_BUFFER_TIMESTAMP(buffer)), gst_buffer_get_size(buffer));
-  }
-#else
-  if (info->type == GST_PAD_PROBE_TYPE_BUFFER) {
+  if (info->type & GST_PAD_PROBE_TYPE_BUFFER) {
     GstBuffer *buffer = gst_pad_probe_info_get_buffer (info);
 
     /* show name and timestamp */
     GST_DEBUG_OBJECT(WFD_RTSP_MANAGER (u_data), "BUFFER PROBE : %s:%s :  %u:%02u:%02u.%09u  (%d bytes)\n",
         GST_STR_NULL(GST_ELEMENT_NAME(parent)), GST_STR_NULL(GST_PAD_NAME(pad)),
         GST_TIME_ARGS(GST_BUFFER_TIMESTAMP(buffer)), gst_buffer_get_size(buffer));
-  } else if (info->type == GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM ||
-                info->type == GST_PAD_PROBE_TYPE_EVENT_UPSTREAM ||
-                info->type == GST_PAD_PROBE_TYPE_EVENT_FLUSH ||
-                info->type == GST_PAD_PROBE_TYPE_EVENT_BOTH) {
+  } else if (info->type & GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM ||
+                info->type & GST_PAD_PROBE_TYPE_EVENT_UPSTREAM ||
+                info->type & GST_PAD_PROBE_TYPE_EVENT_FLUSH ||
+                info->type & GST_PAD_PROBE_TYPE_EVENT_BOTH) {
       GstEvent *event = gst_pad_probe_info_get_event (info);
     /* show name and event type */
     GST_DEBUG_OBJECT(WFD_RTSP_MANAGER (u_data), "EVENT PROBE : %s:%s :  %s\n",
@@ -1197,10 +1173,6 @@ wfd_rtsp_manager_pad_probe_cb(GstPad * pad, GstPadProbeInfo *info, gpointer u_da
       }
     }
   }
-
-
-
-#endif
 
   if ( parent ) {
     gst_object_unref(parent);
@@ -1237,27 +1209,6 @@ void wfd_rtsp_manager_enable_pad_probe(WFDRTSPManager * manager)
       pad = NULL;
     }
   }
-#if 0
-  if(manager->requester) {
-    pad = gst_element_get_static_pad(manager->requester, "rtp_sink");
-    if (pad) {
-      if( gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_DATA_DOWNSTREAM, wfd_rtsp_manager_pad_probe_cb, (gpointer)manager, NULL)) {
-        GST_DEBUG_OBJECT (manager, "added pad probe (pad : %s, element : %s)", gst_pad_get_name(pad), gst_element_get_name(manager->requester));
-      }
-      gst_object_unref (pad);
-      pad = NULL;
-    }
-
-    pad = gst_element_get_static_pad(manager->requester, "rtp_src");
-    if (pad) {
-      if( gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_DATA_DOWNSTREAM, wfd_rtsp_manager_pad_probe_cb, (gpointer)manager, NULL)) {
-        GST_DEBUG_OBJECT (manager, "added pad probe (pad : %s, element : %s)", gst_pad_get_name(pad), gst_element_get_name(manager->requester));
-    }
-      gst_object_unref (pad);
-      pad = NULL;
-    }
-  }
-#endif
 
   if(manager->wfdrtpbuffer) {
     pad = gst_element_get_static_pad(manager->wfdrtpbuffer, "sink");

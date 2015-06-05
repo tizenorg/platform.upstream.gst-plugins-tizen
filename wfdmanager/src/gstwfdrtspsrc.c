@@ -125,31 +125,11 @@ enum _GstWfdRtspSrcBufferMode
 
 #define _SET_FRAMERATE_TO_CAPS 1
 
-
-#define GST_TYPE_WFD_RTSP_NAT_METHOD (gst_wfd_rtsp_nat_method_get_type())
-static GType
-gst_wfd_rtsp_nat_method_get_type (void)
-{
-  static GType wfd_rtsp_nat_method_type = 0;
-  static const GEnumValue wfd_rtsp_nat_method[] = {
-    {GST_WFD_RTSP_NAT_NONE, "None", "none"},
-    {GST_WFD_RTSP_NAT_DUMMY, "Send Dummy packets", "dummy"},
-    {0, NULL, NULL},
-  };
-
-  if (!wfd_rtsp_nat_method_type) {
-    wfd_rtsp_nat_method_type =
-        g_enum_register_static ("GstWFDRTSPNatMethod", wfd_rtsp_nat_method);
-  }
-  return wfd_rtsp_nat_method_type;
-}
-
 /* properties default values */
 #define DEFAULT_LOCATION         NULL
 #define DEFAULT_DEBUG            FALSE
 #define DEFAULT_RETRY            20
 #define DEFAULT_TCP_TIMEOUT      20000000
-#define DEFAULT_NAT_METHOD       GST_WFD_RTSP_NAT_DUMMY
 #define DEFAULT_PROXY            NULL
 #define DEFAULT_RTP_BLOCKSIZE    0
 #define DEFAULT_USER_ID          NULL
@@ -168,7 +148,6 @@ enum
   PROP_DEBUG,
   PROP_RETRY,
   PROP_TCP_TIMEOUT,
-  PROP_NAT_METHOD,
   PROP_PROXY,
   PROP_RTP_BLOCKSIZE,
   PROP_USER_ID,
@@ -194,7 +173,7 @@ enum
 #define CMD_CLOSE	3
 #define CMD_WAIT	4
 #define CMD_LOOP	5
-#define CMD_SET_PARAM	6
+#define CMD_SEND_REQUEST	6
 
 #define GST_ELEMENT_PROGRESS(el, type, code, text)      \
 G_STMT_START {                                          \
@@ -237,10 +216,6 @@ static void gst_wfdrtspsrc_set_tcp_timeout (GstWFDRTSPSrc * src, guint64 timeout
 static gboolean gst_wfdrtspsrc_setup_auth (GstWFDRTSPSrc * src,
     GstRTSPMessage * response);
 
-static GstRTSPResult gst_wfdrtspsrc_send_cb (GstRTSPExtension * ext,
-    GstRTSPMessage * request, GstRTSPMessage * response, GstWFDRTSPSrc * src);
-
-
 static void gst_wfdrtspsrc_uri_handler_init (gpointer g_iface,
     gpointer iface_data);
 static gboolean gst_wfdrtspsrc_uri_set_uri (GstURIHandler * handler,
@@ -260,37 +235,36 @@ gst_wfdrtspsrc_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
 
 static gboolean gst_wfdrtspsrc_parse_methods (GstWFDRTSPSrc * src, GstRTSPMessage * response);
 
-static GstRTSPResult gst_wfdrtspsrc_send_keep_alive (GstWFDRTSPSrc * src);
-
 static void gst_wfdrtspsrc_connection_flush (GstWFDRTSPSrc * src, gboolean flush);
 
 static GstRTSPResult gst_wfdrtspsrc_get_video_parameter(GstWFDRTSPSrc * src, WFDMessage *msg);
 static GstRTSPResult gst_wfdrtspsrc_get_audio_parameter(GstWFDRTSPSrc * src, WFDMessage *msg);
 
 #ifdef ENABLE_WFD_MESSAGE
-
-void __wfd_config_message_init(GstWFDRTSPSrc * src)
+static gint
+__wfd_config_message_init(GstWFDRTSPSrc * src)
 {
   src->message_handle = dlopen(WFD_MESSAGE_FEATURES_PATH, RTLD_LAZY);
   if (src->message_handle == NULL)
   {
     GST_ERROR("failed to init __wfd_config_message_init");
     src->extended_wfd_message_support = FALSE;
+    return FALSE;
   }
   else
   {
     src->extended_wfd_message_support = TRUE;
   }
-  return;
+  return TRUE;
 }
 
-void *
+static void *
 __wfd_config_message_func(GstWFDRTSPSrc *src, const char *func)
 {
   return dlsym(src->message_handle, func);
 }
 
-void
+static void
 __wfd_config_message_close(GstWFDRTSPSrc *src)
 {
   GST_DEBUG("close wfd cofig message");
@@ -363,12 +337,6 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
       g_param_spec_uint64 ("tcp-timeout", "TCP Timeout",
           "Fail after timeout microseconds on TCP connections (0 = disabled)",
           0, G_MAXUINT64, DEFAULT_TCP_TIMEOUT,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  g_object_class_install_property (gobject_class, PROP_NAT_METHOD,
-      g_param_spec_enum ("nat-method", "NAT Method",
-          "Method to use for traversing firewalls and NAT",
-          GST_TYPE_WFD_RTSP_NAT_METHOD, DEFAULT_NAT_METHOD,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_PROXY,
@@ -461,8 +429,6 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
   gstelement_class->change_state = gst_wfdrtspsrc_change_state;
 
   gstbin_class->handle_message = gst_wfdrtspsrc_handle_message;
-
-  gst_wfd_rtsp_ext_list_init ();
 }
 
 static GstStructure *
@@ -507,7 +473,7 @@ gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
 {
   GstPadTemplate *template = NULL;
   GstPad * outpad = NULL;
-
+  gint result = FALSE;
 
 #ifdef G_OS_WIN32
   WSADATA wsa_data;
@@ -522,15 +488,11 @@ gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
   src->debug = DEFAULT_DEBUG;
   src->retry = DEFAULT_RETRY;
   gst_wfdrtspsrc_set_tcp_timeout (src, DEFAULT_TCP_TIMEOUT);
-  src->nat_method = DEFAULT_NAT_METHOD;
   gst_wfdrtspsrc_set_proxy (src, DEFAULT_PROXY);
   src->rtp_blocksize = DEFAULT_RTP_BLOCKSIZE;
   src->user_id = g_strdup (DEFAULT_USER_ID);
   src->user_pw = g_strdup (DEFAULT_USER_PW);
   src->user_agent = g_strdup (DEFAULT_USER_AGENT);
-  src->ssr_timeout.tv_sec = 0;
-  src->ssr_timeout.tv_usec = 0;
-  src->is_paused = TRUE;
   src->do_stop = FALSE;
   src->audio_param = NULL;
   src->video_param = NULL;
@@ -539,15 +501,10 @@ gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
   src->audio_param = gst_wfd_rtsp_set_default_audio_param ();
   src->video_param = gst_wfd_rtsp_set_default_video_param ();
 #ifdef ENABLE_WFD_MESSAGE
-  __wfd_config_message_init(src);
+  result = __wfd_config_message_init(src);
+  if(result == FALSE)
+    return;
 #endif
-
-  /* get a list of all extensions */
-  src->extensions = gst_wfd_rtsp_ext_list_get ();
-
-  /* connect to send signal */
-  gst_wfd_rtsp_ext_list_connect (src->extensions, "send",
-      (GCallback) gst_wfdrtspsrc_send_cb, src);
 
   /* init lock */
   g_rec_mutex_init (&(src->task_rec_lock));
@@ -670,7 +627,6 @@ gst_wfdrtspsrc_finalize (GObject * object)
   src = GST_WFDRTSPSRC (object);
 
   GST_INFO ("finalize");
-  gst_wfd_rtsp_ext_list_free (src->extensions);
   gst_rtsp_url_free (src->conninfo.url);
   if (src->conninfo.location)
     g_free (src->conninfo.location);
@@ -805,9 +761,6 @@ gst_wfdrtspsrc_set_property (GObject * object, guint prop_id, const GValue * val
     case PROP_TCP_TIMEOUT:
       gst_wfdrtspsrc_set_tcp_timeout (src, g_value_get_uint64 (value));
       break;
-    case PROP_NAT_METHOD:
-      src->nat_method = g_value_get_enum (value);
-      break;
     case PROP_PROXY:
       gst_wfdrtspsrc_set_proxy (src, g_value_get_string (value));
       break;
@@ -914,9 +867,6 @@ gst_wfdrtspsrc_get_property (GObject * object, guint prop_id, GValue * value,
       g_value_set_uint64 (value, timeout);
       break;
     }
-    case PROP_NAT_METHOD:
-      g_value_set_enum (value, src->nat_method);
-      break;
     case PROP_PROXY:
     {
       gchar *str;
@@ -1008,17 +958,17 @@ gst_wfdrtspsrc_connection_receive (GstWFDRTSPSrc * src, GstRTSPConnection * conn
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src)
+gst_wfdrtspsrc_send_request (GstWFDRTSPSrc * src)
 {
   GstRTSPMessage request = { 0 };
   GstRTSPMessage response = { 0 };
   GstRTSPResult res = GST_RTSP_OK;
   WFDResult wfd_res = WFD_OK;
-  WFDMessage *msg_no= NULL;
+  WFDMessage *wfd_msg= NULL;
   GstWFDParam param = WFD_PARAM_NONE;
-  guint msglen = 0;
-  GString *msglength = NULL;
-  gchar *msg = NULL;
+  gchar *rtsp_body = NULL;
+  guint rtsp_body_length = 0;
+  GString *rtsp_body_length_str = NULL;
 
   if (src->wfd_param == WFD_PARAM_NONE) {
     GST_ERROR_OBJECT (src, "no wfd messag to be sent...");
@@ -1033,83 +983,56 @@ gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src)
   if (res < 0)
     goto error;
 
+  gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
+
   /* Create set_parameter body to be sent in the request */
-  WFDCONFIG_MESSAGE_NEW (&msg_no, wfd_res);
-
-  if (wfd_res != WFD_OK) {
-    GST_ERROR_OBJECT (src, "Failed to create wfd message...");
-    res = GST_RTSP_ERROR;
-    goto error;
-  }
-
-  WFDCONFIG_MESSAGE_INIT(msg_no, wfd_res);
-  if (wfd_res != WFD_OK) {
-    GST_ERROR_OBJECT (src, "Failed to init wfd message...");
-    res = GST_RTSP_ERROR;
-    goto error;
-  }
+  WFDCONFIG_MESSAGE_NEW (&wfd_msg, error);
+  WFDCONFIG_MESSAGE_INIT(wfd_msg, error);
 
   switch(param) {
-
-    case WFD_ROUTE: {
-      WFDCONFIG_SET_AUDIO_SINK_TYPE(msg_no, WFD_SECONDARY_SINK, wfd_res);
-      if (wfd_res != WFD_OK) {
-        GST_ERROR_OBJECT (src, "Failed to set audio sink type...");
-        res = GST_RTSP_ERROR;
-        goto error;
-      }
+    case WFD_ROUTE:
+     /* Note : RTSP M10  :
+      *   Send RTSP SET_PARAMETER with wfd-route to change the WFD sink at which audio is rendered.
+      *   Applies only when both a primary and secondary sinks are in WFD session with a WFD source.
+      */
+      WFDCONFIG_SET_AUDIO_SINK_TYPE(wfd_msg, WFD_SECONDARY_SINK, error);
       break;
-    }
 
-    case WFD_CONNECTOR_TYPE: {
-      WFDCONFIG_SET_CONNECTOR_TYPE(msg_no, WFD_CONNECTOR_VGA, wfd_res);
-      if (wfd_res != WFD_OK) {
-        GST_ERROR_OBJECT (src, "Failed to set connector type...");
-        res = GST_RTSP_ERROR;
-        goto error;
-      }
+    case WFD_CONNECTOR_TYPE:
+     /* Note : RTSP M11  :
+      *   Send RTSP SET_PARAMETER with wfd-connector-type to indicate change of active connector type,
+      *     when the WFD source and WFD sink support content protection.
+      */
+      WFDCONFIG_SET_CONNECTOR_TYPE(wfd_msg, WFD_CONNECTOR_VGA, error);
       break;
-    }
 
-    case WFD_STANDBY: {
-      WFDCONFIG_SET_STANDBY(msg_no, TRUE, wfd_res);
-      if (wfd_res != WFD_OK) {
-        GST_ERROR_OBJECT (src, "Failed to set standby...");
-        res = GST_RTSP_ERROR;
-        goto error;
-      }
+    case WFD_STANDBY:
+     /* Note : RTSP M12  :
+      *   Send RTSP SET_PARAMETER with wfd-stanby to indicate that the sender is entering WFD stanby mode.
+      */
+      WFDCONFIG_SET_STANDBY(wfd_msg, TRUE, error);
       break;
-    }
 
-    case WFD_IDR_REQUEST: {
-      WFDCONFIG_SET_IDR_REQUESTER(msg_no, wfd_res);
-      if (wfd_res != WFD_OK) {
-        GST_ERROR_OBJECT (src, "Failed to set IDR request...");
-        res = GST_RTSP_ERROR;
-        goto error;
-      }
+    case WFD_IDR_REQUEST:
+     /* Note : RTSP M13  :
+      *   Send RTSP SET_PARAMETER with wfd-idr-request to request IDR refresh.
+      */
+      WFDCONFIG_SET_IDR_REQUESTER(wfd_msg, error);
       break;
-    }
 
-    case WFD_UIBC_CAPABILITY: {
-      WFDCONFIG_SET_UIBC_CAPABILITY(msg_no, WFD_UIBC_INPUT_CAT_UNKNOWN, 0, NULL, 0, 0, wfd_res);
-      if (wfd_res != WFD_OK) {
-        GST_ERROR_OBJECT (src, "Failed to set UIBC capability...");
-        res = GST_RTSP_ERROR;
-        goto error;
-      }
+    case WFD_UIBC_CAPABILITY:
+     /* Note : RTSP M14  :
+      *   Send RTSP SET_PARAMETER with wfd-uibc-capability to select UIBC to be used.
+      */
+      WFDCONFIG_SET_UIBC_CAPABILITY(wfd_msg, WFD_UIBC_INPUT_CAT_UNKNOWN, 0, NULL, 0, 0, error);
       break;
-    }
 
-    case WFD_UIBC_SETTING: {
-      WFDCONFIG_SET_UIBC_STATUS(msg_no, TRUE, wfd_res);
-      if (wfd_res != WFD_OK) {
-        GST_ERROR_OBJECT (src, "Failed to set UIBC setting...");
-        res = GST_RTSP_ERROR;
-        goto error;
-      }
+    case WFD_UIBC_SETTING:
+     /* Note : RTSP M15 :
+      *   Send RTSP SET_PARAMETER with wfd-uibc-setting to enable or disable the UIBC.
+      */
+      WFDCONFIG_SET_UIBC_STATUS(wfd_msg, TRUE, error);
       break;
-    }
 
     default:
       GST_ERROR_OBJECT (src, "Unhandled WFD message type...");
@@ -1117,42 +1040,29 @@ gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src)
       break;
   }
 
-  WFDCONFIG_MESSAGE_DUMP(msg_no, wfd_res);
-  if (wfd_res != WFD_OK) {
-    GST_ERROR_OBJECT (src, "Failed to dump wfd message...");
-    res = GST_RTSP_ERROR;
+  WFDCONFIG_MESSAGE_DUMP(wfd_msg);
+  WFDCONFIG_MESSAGE_AS_TEXT(wfd_msg, rtsp_body, error);
+
+  if(rtsp_body == NULL)
     goto error;
-  }
 
-  WFDCONFIG_MESSAGE_AS_TEXT(msg_no, msg);
-  if (msg == NULL) {
-    GST_ERROR_OBJECT (src, "Failed to get wfd message as text...");
-    res = GST_RTSP_ERROR;
-    goto error;
-  }
+  rtsp_body_length = strlen(rtsp_body);
+  rtsp_body_length_str = g_string_new ("");
+  g_string_append_printf (rtsp_body_length_str,"%d",rtsp_body_length);
 
-  msglen = strlen(msg);
-  msglength = g_string_new ("");
-  g_string_append_printf (msglength,"%d",msglen);
+  GST_DEBUG ("WFD message body: %s", rtsp_body);
 
-  res = gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
-
-  GST_DEBUG ("WFD message body: %s", msg);
   /* add content-length type */
-  res = gst_rtsp_message_add_header (&request, GST_RTSP_HDR_CONTENT_LENGTH, g_string_free (msglength, FALSE));
-  if (res != GST_RTSP_OK) {
-    GST_ERROR_OBJECT (src, "Failed to add header to rtsp request...");
-    goto error;
-  }
+  gst_rtsp_message_add_header (&request, GST_RTSP_HDR_CONTENT_LENGTH, g_string_free (rtsp_body_length_str, FALSE));
 
   /* adding wfdconfig data to request */
-  res = gst_rtsp_message_set_body (&request,(guint8 *)msg, msglen);
+  res = gst_rtsp_message_set_body (&request,(guint8 *)rtsp_body, rtsp_body_length);
   if (res != GST_RTSP_OK) {
     GST_ERROR_OBJECT (src, "Failed to set body to rtsp request...");
     goto error;
   }
 
-  WFDCONFIG_MESSAGE_FREE(msg_no);
+  WFDCONFIG_MESSAGE_FREE(wfd_msg);
 
   /* send request message  */
   GST_DEBUG_OBJECT (src, "send reuest...");
@@ -1168,10 +1078,14 @@ gst_wfdrtspsrc_prepare_set_param (GstWFDRTSPSrc * src)
 /* ERRORS */
 error:
  {
-    if(msg_no)
-      WFDCONFIG_MESSAGE_FREE(msg_no);
+    if(wfd_msg)
+      WFDCONFIG_MESSAGE_FREE(wfd_msg);
     gst_rtsp_message_unset (&request);
     gst_rtsp_message_unset (&response);
+    if(wfd_res != WFD_OK) {
+      GST_ERROR_OBJECT(src, "Message config error : %d", wfd_res);
+      return GST_RTSP_ERROR;
+    }
     return res;
  }
 }
@@ -1205,7 +1119,7 @@ gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * eve
       if (gst_structure_has_name (s, "GstWFDIDRRequest")) {
         /* Send IDR request */
 	 src->wfd_param = WFD_IDR_REQUEST;
-	 gst_wfdrtspsrc_loop_send_cmd(src, CMD_SET_PARAM);
+	 gst_wfdrtspsrc_loop_send_cmd(src, CMD_SEND_REQUEST);
       }
       break;
     default:
@@ -1273,32 +1187,6 @@ gst_wfdrtspsrc_handle_src_query (GstPad * pad, GstObject *parent, GstQuery * que
 
   return res;
 }
-
-
-/* send a couple of dummy random packets on the receiver RTP port to the server,
- * this should make a firewall think we initiated the data transfer and
- * hopefully allow packets to go from the sender port to our RTP receiver port */
-static gboolean
-gst_wfdrtspsrc_send_dummy_packets (GstWFDRTSPSrc * src)
-{
-  WFDRTSPManager *manager = src->manager;
-
-  if (src->nat_method != GST_WFD_RTSP_NAT_DUMMY)
-    return TRUE;
-
-  if (manager) {
-    if (manager->fakesrc && manager->udpsink[0]) {
-      GST_DEBUG_OBJECT (src, "sending dummy packet to manager %p", manager);
-      gst_element_set_state (manager->udpsink[0], GST_STATE_NULL);
-      gst_element_set_state (manager->fakesrc, GST_STATE_NULL);
-      gst_element_set_state (manager->udpsink[0], GST_STATE_PLAYING);
-      gst_element_set_state (manager->fakesrc, GST_STATE_PLAYING);
-    }
-  }
-
-  return TRUE;
-}
-
 
 static void
 gst_wfdrtspsrc_configure_caps (GstWFDRTSPSrc * src)
@@ -1394,19 +1282,6 @@ gst_wfdrtspsrc_stream_push_event (WFDRTSPManager * manager, GstEvent * event, gb
     else
       res &= gst_pad_send_event (manager->channelpad[1], event);
   }
-
-#if 0
-  if (source && manager->udpsrc[2]) {
-    gst_event_ref (event);
-    res &= gst_element_send_event (manager->udpsrc[2], event);
-  } else if (manager->channelpad[2]) {
-    gst_event_ref (event);
-    if (GST_PAD_IS_SRC (manager->channelpad[2]))
-      res &= gst_pad_push_event (manager->channelpad[2], event);
-    else
-      res &= gst_pad_send_event (manager->channelpad[2], event);
-  }
-#endif
 
 done:
   gst_event_unref (event);
@@ -1533,18 +1408,6 @@ gst_wfdrtspsrc_conninfo_close (GstWFDRTSPSrc * src, GstWFDRTSPConnInfo * info,
   return GST_RTSP_OK;
 }
 
-static GstRTSPResult
-gst_wfdrtspsrc_conninfo_reconnect (GstWFDRTSPSrc * src, GstWFDRTSPConnInfo * info)
-{
-  GstRTSPResult res;
-
-  GST_DEBUG_OBJECT (src, "reconnecting connection...");
-  gst_wfdrtspsrc_conninfo_close (src, info, FALSE);
-  res = gst_wfdrtspsrc_conninfo_connect (src, info);
-
-  return res;
-}
-
 static void
 gst_wfdrtspsrc_connection_flush (GstWFDRTSPSrc * src, gboolean flush)
 {
@@ -1568,26 +1431,27 @@ static GstRTSPResult
 gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
     GstRTSPMessage * request)
 {
+  GstRTSPMethod method = GST_RTSP_INVALID;
+  GstRTSPVersion version = GST_RTSP_VERSION_INVALID;
   GstRTSPMessage response = { 0 };
   GstRTSPResult res = GST_RTSP_OK;
-  GstRTSPMethod method;
+  WFDResult wfd_res = WFD_OK;
   const gchar *uristr;
-  GstRTSPVersion version;
-  GstRTSPMethod options;
-  gchar *str;
-  guint8 *data;
-  guint size;
+  guint8 *data = NULL;
+  guint size = 0;
+  WFDMessage *wfd_msg = NULL;
 
-  GST_DEBUG_OBJECT (src, "got server request message");
-
-  res = gst_wfd_rtsp_ext_list_receive_request (src->extensions, request);
-
-  gst_rtsp_message_parse_request (request, &method, &uristr, &version);
+  res = gst_rtsp_message_parse_request (request, &method, &uristr, &version);
+  if (res < 0)
+    goto send_error;
 
   if (version != GST_RTSP_VERSION_1_0) {
     /* we can only handle 1.0 requests */
     res = GST_RTSP_ENOTIMPL;
+    goto send_error;
   }
+
+  GST_DEBUG_OBJECT (src, "got %s request", gst_rtsp_method_as_text(method));
 
   if (src->debug)
     wfd_rtsp_manager_message_dump (request);
@@ -1595,101 +1459,80 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
   switch(method) {
     case GST_RTSP_OPTIONS:
     {
-      gchar *tmp = NULL;
-      char *options_str = NULL;
-
-      options = GST_RTSP_GET_PARAMETER |GST_RTSP_SET_PARAMETER;
-
-      str = gst_rtsp_options_as_text (options);
-
-      tmp = g_strdup (", org.wfa.wfd1.0");
-
-      GST_LOG ("tmp = %s\n\n", tmp);
-
-      options_str = (char *) malloc (strlen(tmp) + strlen (str) + 1);
-      if (!options_str) {
-        GST_ERROR ("Failed to allocate memory...");
-        res = GST_RTSP_ENOMEM;
+      /* Note : RTSP M1 :
+       *   A WFD source shall send an RTSP M1 request to a WFD sink to begin the RTSP procedures and a WFD Capability Negotiation.
+       *   A WFD sink shall respond with an RTSP M1 response message which contains an RTSP OPTIONS.
+       */
+      res = gst_rtsp_message_init_response (&response, GST_RTSP_STS_OK, gst_rtsp_status_as_text (GST_RTSP_STS_OK), request);
+      if (res < 0)
         goto send_error;
-      } else {
-        strncpy (options_str, str, strlen (str));
-        strncpy (options_str+strlen(str), tmp, strlen (tmp));
-        options_str [strlen(tmp) + strlen (str)] = '\0';
 
-        GST_LOG ("\n\noptions_str = %s\n\n", options_str);
-      }
-      GST_DEBUG_OBJECT (src, "Creating OPTIONS response");
-
-      res = gst_rtsp_message_init_response (&response, GST_RTSP_STS_OK,
-          gst_rtsp_status_as_text (GST_RTSP_STS_OK), request);
-      if(res < 0) {
-        if(options_str)
-          g_free (options_str);
-        goto send_error;
-      }
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, options_str);
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, (const gchar *)"org.wfa.wfd1.0");
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, gst_rtsp_options_as_text(GST_RTSP_SET_PARAMETER));
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, gst_rtsp_options_as_text(GST_RTSP_GET_PARAMETER));
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, gst_rtsp_options_as_text(GST_RTSP_TEARDOWN));
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, gst_rtsp_options_as_text(GST_RTSP_OPTIONS));
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, gst_rtsp_options_as_text(GST_RTSP_PLAY));
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, gst_rtsp_options_as_text(GST_RTSP_SETUP));
       gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
-      if(options_str)
-        g_free (options_str);
       break;
     }
 
     case GST_RTSP_GET_PARAMETER:
     {
-      gchar *msg = NULL;
-      guint msglen = 0;
-      GString *msglength = NULL;
-      WFDMessage *msg3rep = NULL;
-      WFDResult wfd_res = WFD_OK;
-
-      GST_DEBUG_OBJECT (src, "Got GET_PARAMETER request");
+      gchar *rtsp_body = NULL;
+      guint rtsp_body_length = 0;
+      GString *rtsp_body_length_str = NULL;
 
       res = gst_rtsp_message_init_response (&response, GST_RTSP_STS_OK, gst_rtsp_status_as_text (GST_RTSP_STS_OK), request);
-      if(res < 0)
+      if (res < 0)
         goto send_error;
 
       gst_rtsp_message_add_header (&response, GST_RTSP_HDR_CONTENT_TYPE, "text/parameters");
       gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
 
-      gst_rtsp_message_get_body (request, &data, &size);
+      res = gst_rtsp_message_get_body (request, &data, &size);
+      if (res < 0)
+        goto send_error;
 
-      /* Check if message is keep-alive if body is empty*/
-      if(size==0) {
-        res = gst_rtsp_message_init_response (&response, GST_RTSP_STS_OK, "OK",
-              request);
-        gst_rtsp_connection_reset_timeout (src->conninfo.connection);
+      if (size==0) {
+        /* Note : RTSP M16 : WFD keep-alive :
+         *   The WFD keep-alive function is used to periodically ensure the status of WFD sesion.
+         *   A WFD source indicates the timeout value via the "Session:" line in the RTSP M6 response.
+         *   A WFD sink shall respond with an RTSP M16 request message upon successful receiving the RTSP M16 request message.
+         */
+        res = gst_rtsp_connection_reset_timeout (src->conninfo.connection);
         if (res < 0)
           goto send_error;
+
         break;
       }
 
-      /* Creating WFD parameters supported to send as response for
-        * GET_PARAMETER request from server*/
+      if(src->extended_wfd_message_support == FALSE)
+        goto message_config_error;
 
-      WFDCONFIG_MESSAGE_NEW(&msg3rep, wfd_res);
-      if(msg3rep == NULL || wfd_res != WFD_OK) {
-        res = GST_RTSP_ERROR;
-        goto send_error;
-      }
+      WFDCONFIG_MESSAGE_NEW(&wfd_msg, message_config_error);
+      WFDCONFIG_MESSAGE_INIT(wfd_msg, message_config_error);
+      WFDCONFIG_MESSAGE_PARSE_BUFFER(data, size, wfd_msg, message_config_error);
+      WFDCONFIG_MESSAGE_DUMP(wfd_msg);
 
-      WFDCONFIG_MESSAGE_INIT(msg3rep, wfd_res);
-      WFDCONFIG_MESSAGE_PARSE_BUFFER(data, size, msg3rep, wfd_res);
-      if(wfd_res != WFD_OK) {
-        res = GST_RTSP_ERROR;
-        goto send_error;
-      }
-      WFDCONFIG_MESSAGE_DUMP(msg3rep, wfd_res);
-      if (wfd_res != WFD_OK) {
-        GST_ERROR_OBJECT (src, "Failed to dump wfd message...");
-      }
-
-      /* Check if the request message has "wfd_audio_codecs" in it */
-      if(msg3rep->audio_codecs) {
+      /* Note : RTSP M3 :
+       *   The WFD source shall send RTSP M3 request to the WFD sink to query the WFD sink's attributes and capabilities.
+       *   A WFD sink shall respond with an RTSP M3 response message which contains the values of the requested parameters.
+       *   The WFD source may query all parameters at once with a single RTSP M3 request message or may send separate RTSP M3 request message.
+       *   The WFD sink shall only response with formats and settings that it can accept in the following RTSP M4 message exchnage.
+       */
+      /* Note : wfd-audio-codecs :
+       *    The wfd-audio-codecs parameter specifies the audio formats supported in the WFD session.
+       *    Valid audio codecs are LPCM, AAC, AC3.
+       *    Primary sink should support one of audio codecs.
+       */
+      if(wfd_msg->audio_codecs) {
         guint audio_codec = 0;
         guint audio_sampling_frequency = 0;
         guint audio_channels = 0;
         guint audio_latency = 0;
-        //reading audio parameters which are set from sink ini file
+
         if(src->audio_param != NULL) {
           if (gst_structure_has_field (src->audio_param, "audio_codec"))
             gst_structure_get_uint (src->audio_param, "audio_codec", &audio_codec);
@@ -1701,12 +1544,21 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
             gst_structure_get_uint (src->audio_param, "audio_sampling_frequency", &audio_sampling_frequency);
         }
 
-        WFDCONFIG_SET_SUPPORTED_AUDIO_FORMAT(msg3rep, audio_codec,
-            audio_sampling_frequency, audio_channels, 16, audio_latency, wfd_res);
+        WFDCONFIG_SET_SUPPORTED_AUDIO_FORMAT(wfd_msg,
+          audio_codec,
+          audio_sampling_frequency,
+          audio_channels,
+          16,
+          audio_latency,
+          message_config_error);
       }
 
-      /* Check if the request message has "wfd_video_formats" in it */
-      if(msg3rep->video_formats) {
+      /* Note : wfd-video-formats :
+       *    The wfd-video-formats parameter specifies the supported video resolutions,
+       *    H.644 codec profile, level, decoder latency,  minimum slice size, slice encoding parameters
+       *      and support for video frame rate control (including explicit frame rate change and implicit video frame skipping.
+       */
+      if(wfd_msg->video_formats) {
         guint video_codec = 0;
         guint video_native_resolution = 0;
         guint video_cea_support = 0;
@@ -1721,7 +1573,6 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
         gint video_slice_enc_param = 0;
         gint video_framerate_control_support = 0;
 
-        //reading video parameters which are set from sink ini file
         if (src->video_param != NULL) {
           if (gst_structure_has_field (src->video_param, "video_codec"))
             gst_structure_get_uint (src->video_param, "video_codec", &video_codec);
@@ -1751,8 +1602,7 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
             gst_structure_get_int (src->video_param, "video_framerate_control_support", &video_framerate_control_support);
         }
 
-
-        WFDCONFIG_SET_SUPPORTED_VIDEO_FORMAT(msg3rep,
+        WFDCONFIG_SET_SUPPORTED_VIDEO_FORMAT(wfd_msg,
             video_codec,
             WFD_VIDEO_CEA_RESOLUTION,
             video_native_resolution,
@@ -1767,148 +1617,198 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
             video_minimum_slicing,
             video_slice_enc_param,
             video_framerate_control_support,
-            wfd_res);
+            message_config_error);
       }
 
-      /* Check if the request has "wfd_client_rtp_ports" in it */
-      if(msg3rep->client_rtp_ports) {
-        /* Hardcoded as of now. This is to comply with dongle port settings.
-        This should be derived from gst_wfdrtspsrc_alloc_udp_ports */
-        src->primary_rtpport = 19000;
-        src->secondary_rtpport = 0;
-        WFDCONFIG_SET_PREFERD_RTP_PORT(msg3rep,
-                     WFD_RTSP_TRANS_RTP,
-                     WFD_RTSP_PROFILE_AVP,
-                     WFD_RTSP_LOWER_TRANS_UDP,
-                     src->primary_rtpport,
-                     src->secondary_rtpport,
-                     wfd_res);
-      }
-
-      if(wfd_res != WFD_OK) {
-        res = GST_RTSP_ERROR;
-        goto send_error;
-      }
-
-      /* Check if the request has "wfd_3d_video_formats " in it */
-      if(msg3rep->video_3d_formats) {
-        /* TODO: Set preferred 3d_video_formats */
+      /* Note : wfd-3d-formats :
+       *    The wfd-3d-formats parameter specifies the support for stereoscopic video capabilities.
+       */
+      if(wfd_msg->video_3d_formats) {
+        /* TODO : Set preferred video_3d_formats */
         wfd_res = WFD_OK;
       }
 
-      /* When set preferred 3d_video_formats is done, following block need to be uncommented */
-      /*if(wfd_res != WFD_OK) {
-      res = GST_RTSP_ERROR;
-      goto send_error;
-      }*/
-
-      /* Check if the request has "wfd_content_protection " in it */
-      if(msg3rep->content_protection) {
+      /* Note : wfd-content-protection :
+       *   The wfd-content-protection parameter specifies whether the WFD sink supports the HDCP system 2.0/2.1 for content protection.
+       */
+     if(wfd_msg->content_protection) {
         gint hdcp_version = 0;
         gint hdcp_port_no = 0;
-        //reading hdcp parameters which are set from sink ini file
+
         if (src->hdcp_param != NULL) {
-          if (gst_structure_has_field (src->hdcp_param, "hdcp_version")) {
+          if (gst_structure_has_field (src->hdcp_param, "hdcp_version"))
             gst_structure_get_int (src->hdcp_param, "hdcp_version", &hdcp_version);
-            GST_DEBUG_OBJECT(src, "hdcp version : %d", hdcp_version);
-          }
-
-          if (gst_structure_has_field (src->hdcp_param, "hdcp_port_no")) {
+          if (gst_structure_has_field (src->hdcp_param, "hdcp_port_no"))
             gst_structure_get_int (src->hdcp_param, "hdcp_port_no", &hdcp_port_no);
-            GST_DEBUG_OBJECT(src, "hdcp_port_no : %d", hdcp_port_no);
-          }
-        } else {
-            GST_DEBUG_OBJECT(src, "No HDCP");
         }
-        WFDCONFIG_SET_CONTPROTECTION_TYPE(msg3rep, hdcp_version, (guint32)hdcp_port_no, wfd_res);
+
+        WFDCONFIG_SET_CONTENT_PROTECTION_TYPE(wfd_msg,
+          hdcp_version,
+          (guint32)hdcp_port_no,
+          message_config_error);
       }
 
-      if(wfd_res != WFD_OK) {
-        res = GST_RTSP_ERROR;
-        goto send_error;
-      }
-      /* Check if the request has "wfd_display_edid" in it */
-      if(msg3rep->display_edid) {
+      /* Note : wfd-display-edid :
+       *   The wfd-display-edid parameter specifies the EDID of the display on which the content will be rendered.
+       *   EDID data comes in multiples of 128-byte blocks of EDID data depending on the EDID structure that it supports.
+       *   If a WFD sink reports wfd-connector-type as HDMI or DP or UDI, the WFD sink should return the EDID of the display that renders the streamed video.
+       *   The WFD sink dongle without an integrated display or with an integrated display that is not being used to render streamed video
+       *     shall not set the edid filed of the wfd-display-edid paramter to "none" regardless of whether an external display devices is attached or not.
+       */
+      if(wfd_msg->display_edid) {
         /* TODO: Set preferred display_edid */
         wfd_res = WFD_OK;
       }
 
-      /* when set preferred display_edid following block need to be uncommented. */
-      /*if(wfd_res != WFD_OK) {
-      res = GST_RTSP_ERROR;
-      goto send_error;
-      }*/
-
-      /* Check if the request has "wfd_coupled_sink" in it */
-      if(msg3rep->coupled_sink) {
-        //wfd_res = wfdconfig_set_coupled_sink(msg3rep, WFD_SINK_NOT_COUPLED, NULL);
+      /* Note : wfd-coupled-sink :
+       *   The wfd-coupled-sink parameter is used by a WFD sink to convey its coupled status
+       *     and if coupled to another WFD sink, the coupled WFD sink's MAC address
+       */
+      if(wfd_msg->coupled_sink) {
         /* To test with dummy coupled sink address */
-        WFDCONFIG_SET_COUPLED_SINK(msg3rep,WFD_SINK_COUPLED,(gchar *)"1.0.0.1:435", wfd_res);
+        WFDCONFIG_SET_COUPLED_SINK(wfd_msg,
+          WFD_SINK_COUPLED,
+          (gchar *)"1.0.0.1:435",
+          message_config_error);
       }
 
-      if(wfd_res != WFD_OK) {
-        res = GST_RTSP_ERROR;
+      /* Note : wfd-client-rtp-ports :
+       *   The wfd-coupled-sink parameter is used by a WFD sink to convey the RTP port(s) that the WFD sink is listening on
+       *     and by the a WFD source to indicate how audio, video or both audio and video payload will be encapsulated in the MPEG2-TS stream
+       *     transmitted from the WFD source to the WFD sink.
+       */
+      if(wfd_msg->client_rtp_ports) {
+        /* Hardcoded as of now. This is to comply with dongle port settings.
+        This should be derived from gst_wfdrtspsrc_alloc_udp_ports */
+        src->primary_rtpport = 19000;
+        src->secondary_rtpport = 0;
+        WFDCONFIG_SET_PREFERD_RTP_PORT(wfd_msg,
+          WFD_RTSP_TRANS_RTP,
+          WFD_RTSP_PROFILE_AVP,
+          WFD_RTSP_LOWER_TRANS_UDP,
+          src->primary_rtpport,
+          src->secondary_rtpport,
+          message_config_error);
+      }
+
+      /* Note : wfd-I2C :
+       *   The wfd-I2C parameter is used by a WFD source to inquire whether a WFD sink supports remote I2C read/write function or not.
+       *   If the WFD sink supports remote I2C read/write function, it shall set the value of this parameter to the TCP port number
+       *     to be used by the WFD source to exchange remote I2C read/write messaging transactions with the WFD sink.
+       */
+      if(wfd_msg->I2C) {
+        /* TODO */
+        wfd_res = WFD_OK;
+      }
+
+      /* Note : wfd-uibc-capability :
+       *   The wfd-I2C parameter describes support for the use input back channel and related attributes.
+       *   The WFD source indicates the TCP port number to be used for UIBC in the tcp-port filed in RTSP M4 and/or M14 request messages.
+       *   The WFD sink uses "none" for the tcp-port filed of the wfd-uibc-capability paramter, in RTSP M3 response and M14 request message.
+       */
+      if(wfd_msg->uibc_capability) {
+        /* TODO */
+        wfd_res = WFD_OK;
+      }
+
+      /* Note : wfd-connector-type :
+       *   The WFD source may send wfd-connector-type parameter to inquire about the connector type that is currently active in the WFD sink.
+       *   The WFD sink shall not send wfd-connector-type parameter unless the WFD source support this parameter.
+       *   The WFD sink dongle that is not connected to an external display and it is not acting as a WFD sink with embedded display
+       *     (to render streamed content) shall return a value of "none". Otherwise, the WFD sink shall choose a non-reserved value.
+       */
+      if(wfd_msg->connector_type) {
+        /* TODO */
+        wfd_res = WFD_OK;
+      }
+
+      /* Note : wfd-standby-resume-capability :
+       *   The wfd-standby-resume-capability parameter describes support of both stanby control using
+       *     a wfd-stanby parameter and resume control using PLAY and using triggered-method setting PLAY.
+       */
+      if(wfd_msg->standby_resume_capability) {
+        /* TODO */
+        wfd_res = WFD_OK;
+      }
+
+      WFDCONFIG_MESSAGE_AS_TEXT(wfd_msg, rtsp_body, message_config_error);
+
+      rtsp_body_length = strlen(rtsp_body);
+      rtsp_body_length_str = g_string_new ("");
+      g_string_append_printf (rtsp_body_length_str,"%d", rtsp_body_length);
+
+      //gst_rtsp_message_add_header (&request, GST_RTSP_HDR_CONTENT_LENGTH, g_string_free (rtsp_body_length_str, FALSE));
+
+      res = gst_rtsp_message_set_body (&response, (guint8*)rtsp_body, rtsp_body_length);
+      if (res < 0)
         goto send_error;
-      }
-      WFDCONFIG_MESSAGE_AS_TEXT(msg3rep, msg);
-
-      msglen = strlen(msg);
-      msglength = g_string_new ("");
-      g_string_append_printf (msglength,"%d",msglen);
-
-      GST_DEBUG_OBJECT (src, "GET_PARAMETER response message body: %s\n\n", msg);
-
-      gst_rtsp_message_set_body (&response, (guint8*) msg, msglen);
-
-      WFDCONFIG_MESSAGE_FREE(msg3rep);
 
       break;
-      
     }
 
     case GST_RTSP_SET_PARAMETER:
     {
-      WFDMessage *msg = NULL;
-      WFDResult wfd_res = WFD_OK;
-
-      GST_DEBUG_OBJECT (src, "Got SET_PARAMETER request");
-
-      res = gst_rtsp_message_init_response (&response, GST_RTSP_STS_OK,
-            gst_rtsp_status_as_text (GST_RTSP_STS_OK), request);
+      res = gst_rtsp_message_init_response (&response, GST_RTSP_STS_OK, gst_rtsp_status_as_text (GST_RTSP_STS_OK), request);
       if (res < 0)
         goto send_error;
 
       gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
 
-      gst_rtsp_message_get_body (request, &data, &size);
-      WFDCONFIG_MESSAGE_NEW(&msg, wfd_res);
-      if(msg == NULL || wfd_res != WFD_OK) {
-        res = GST_RTSP_ERROR;
+      res = gst_rtsp_message_get_body (request, &data, &size);
+      if (res < 0)
         goto send_error;
+
+      if(src->extended_wfd_message_support == FALSE)
+        goto message_config_error;
+
+      WFDCONFIG_MESSAGE_NEW(&wfd_msg, message_config_error);
+      WFDCONFIG_MESSAGE_INIT(wfd_msg, message_config_error);
+      WFDCONFIG_MESSAGE_PARSE_BUFFER(data, size, wfd_msg, message_config_error);
+      WFDCONFIG_MESSAGE_DUMP(wfd_msg);
+
+      /* Note : RTSP M4 :
+       */
+      /* Note : wfd-trigger-method :
+       *   The wfd-trigger-method parameter is used by a WFD source to trigger the WFD sink to initiate an operation with the WFD source.
+       */
+      if (wfd_msg->trigger_method) {
+        WFDTrigger trigger = WFD_TRIGGER_UNKNOWN;
+
+        WFDCONFIG_GET_TRIGGER_TYPE(wfd_msg, &trigger, message_config_error);
+
+        res = gst_wfdrtspsrc_connection_send (src, conn, &response, NULL);
+        if (res < 0)
+          goto send_error;
+
+        GST_DEBUG_OBJECT (src, "got trigger method for %s", GST_STR_NULL(wfd_msg->trigger_method->wfd_trigger_method));
+        switch(trigger) {
+          case WFD_TRIGGER_PAUSE:
+            gst_wfdrtspsrc_loop_send_cmd (src, CMD_PAUSE);
+            break;
+          case WFD_TRIGGER_PLAY:
+            gst_wfdrtspsrc_loop_send_cmd (src, CMD_PLAY);
+            break;
+          case WFD_TRIGGER_TEARDOWN:
+            gst_wfdrtspsrc_loop_send_cmd (src, CMD_CLOSE);
+            break;
+          case WFD_TRIGGER_SETUP:
+            if (!gst_wfdrtspsrc_setup (src))
+              goto setup_failed;
+            break;
+          default:
+            break;
+        }
+        goto done;
       }
 
-      WFDCONFIG_MESSAGE_INIT(msg, wfd_res);
-      if(wfd_res != WFD_OK) {
-        res = GST_RTSP_ERROR;
-        goto send_error;
-      }
-      WFDCONFIG_MESSAGE_PARSE_BUFFER(data, size, msg, wfd_res);
-      if(wfd_res != WFD_OK) {
-        res = GST_RTSP_ERROR;
-        goto send_error;
-      }
+      if (wfd_msg->audio_codecs || wfd_msg->video_formats || wfd_msg->video_3d_formats) {
+        GstStructure *stream_info = gst_structure_new ("WFDStreamInfo", NULL, NULL);
 
-      WFDCONFIG_MESSAGE_DUMP(msg, wfd_res);
-      if (wfd_res != WFD_OK) {
-        GST_ERROR_OBJECT (src, "Failed to dump wfd message...");
-      }
-      if (msg->audio_codecs || msg->video_formats || msg->video_3d_formats) {
-        GstStructure *stream_info = NULL;
-        stream_info = gst_structure_new ("WFDStreamInfo", NULL, NULL);
-
-        /* check audio codec */
-        if(msg->audio_codecs) {
-          gst_wfdrtspsrc_get_audio_parameter(src, msg);
+        if(wfd_msg->audio_codecs) {
+          res = gst_wfdrtspsrc_get_audio_parameter(src, wfd_msg);
+          if(res != GST_RTSP_OK) {
+            goto message_config_error;
+          }
 
           gst_structure_set (stream_info,
               "audio_format", G_TYPE_STRING, src->audio_format,
@@ -1918,9 +1818,11 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
               NULL);
         }
 
-        /* check video formats  */
-        if(msg->video_formats) {
-          gst_wfdrtspsrc_get_video_parameter(src, msg);
+        if(wfd_msg->video_formats) {
+          res = gst_wfdrtspsrc_get_video_parameter(src, wfd_msg);
+          if(res != GST_RTSP_OK) {
+            goto message_config_error;
+          }
 
           gst_structure_set (stream_info,
               "video_format", G_TYPE_STRING, "H264",
@@ -1930,202 +1832,174 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
               NULL);
         }
 
-        /* check video formats  */
-        if(msg->video_3d_formats) {
-          guint count = 0;
-          count = msg->video_3d_formats->count;
-          GST_DEBUG_OBJECT (src, "got video 3d formats with %d count.", count);
+        if(wfd_msg->video_3d_formats) {
+        /* TO DO */
         }
 
         g_signal_emit (src, gst_wfdrtspsrc_signals[SIGNAL_UPDATE_MEDIA_INFO], 0, stream_info);
       }
 
-      /* check av format change timing  */
-      if (msg->av_format_change_timing) {
-        if (src->state != GST_RTSP_STATE_PLAYING) {
-          GST_WARNING_OBJECT(src, "could not handle wfd_av_format_change_timing before session is established");
-          break;
-        } else {
-          guint64 pts=0LL, dts=0LL;
-          gboolean need_to_flush = FALSE;
+      /* Note : wfd-presentation-url :
+       *   The wfd-presentation-url parameter describes the Universial Resource Identified (URI)
+       *     to be used in the RTSP Setup (RTSP M6) request message in order to setup the WFD session from the WFD sink to the WFD source.
+       */
+      if(wfd_msg->presentation_url) {
+        gchar *url0 = NULL, *url1 = NULL;
 
-          pts = msg->av_format_change_timing->PTS;
-          dts = msg->av_format_change_timing->DTS;
+        WFDCONFIG_GET_PRESENTATION_URL(wfd_msg, &url0, &url1, message_config_error);
 
+        g_free (src->conninfo.location);
+        src->conninfo.location = g_strdup (url0);
+        /* url1 is ignored as of now */
+      }
+
+      /* Note : wfd-client-rtp-ports :
+       *   The wfd-coupled-sink parameter is used by a WFD sink to convey the RTP port(s) that the WFD sink is listening on
+       *     and by the a WFD source to indicate how audio, video or both audio and video payload will be encapsulated in the MPEG2-TS stream
+       *     transmitted from the WFD source to the WFD sink.
+       */
+      if(wfd_msg->client_rtp_ports) {
+        WFDRTSPTransMode trans = WFD_RTSP_TRANS_UNKNOWN;
+        WFDRTSPProfile profile = WFD_RTSP_PROFILE_UNKNOWN;
+        WFDRTSPLowerTrans lowertrans = WFD_RTSP_LOWER_TRANS_UNKNOWN;
+        guint32 rtp_port0 =0, rtp_port1 =0;
+
+        WFDCONFIG_GET_PREFERD_RTP_PORT(wfd_msg, &trans, &profile, &lowertrans, &rtp_port0, &rtp_port1, message_config_error);
+      }
+
+      /* Note : wfd-preferred-display-mode :
+       *   The wfd-preferred-display-mode-supported field in a wfd-video-formats and/or in a wfd-3d-formats parameter in an RTSP M3 response message
+       *      indicates whether a WFD sink supports the prefered display mod operation or not.
+       */
+      if(wfd_msg->preferred_display_mode) {
+      }
+
+      /* Note : wfd-av-format-change-timing :
+       *   The wfd-av-format-change-timing parameter is used to signal the actual AV format change timing of the streaming data to the WFD sink.
+       *   It shall be included in an RTSP M4 request message for WFD capability re-nogotiation after a WFD session has been established.
+       */
+      if (wfd_msg->av_format_change_timing) {
+        guint64 pts=0LL, dts=0LL;
+        gboolean need_to_flush = FALSE;
+
+        WFDCONFIG_GET_AV_FORMAT_CHANGE_TIMING(wfd_msg, &pts, &dts, message_config_error);
+
+        if (src->state == GST_RTSP_STATE_PLAYING) {
           GST_DEBUG_OBJECT(src, "change format with PTS[%lld] and DTS[%lld]", pts, dts);
 
           g_signal_emit (src, gst_wfdrtspsrc_signals[SIGNAL_AV_FORMAT_CHANGE], 0, (gpointer)&need_to_flush);
 
           if (need_to_flush) {
-              wfd_rtsp_manager_flush(src->manager, TRUE);
-              wfd_rtsp_manager_flush(src->manager, FALSE);
+            wfd_rtsp_manager_flush(src->manager, TRUE);
+            wfd_rtsp_manager_flush(src->manager, FALSE);
           }
         }
       }
 
-      if(msg->presentation_url) {
-        gchar *url0, *url1;
-
-        WFDCONFIG_GET_PRESENTATION_URL(msg, &url0, &url1, wfd_res);
-        if(wfd_res == WFD_OK) {
-          g_free (src->conninfo.location);
-          src->conninfo.location = g_strdup (url0);
-          /* url1 is ignored as of now */
-        } else {
-          res = GST_RTSP_ERROR;
-          goto send_error;
-        }
+      /* Note : RTSP M10 :
+       */
+      /* Note : wfd-route :
+       *   The wfd-route parameter provides a mechanism to specify the destination to which the audio stream is to be routed.
+       */
+      if(wfd_msg->route) {
+        /* TO DO*/
       }
 
-      if(msg->standby) {
+      /* Note : RTSP M12 :
+       */
+      /* Note : wfd-standby :
+       *   The wfd-standby parameter is used to indicate that the sender is entering WFD stanby mode.
+       */
+      if(wfd_msg->standby) {
         gboolean standby_enable = FALSE;
-        WFDCONFIG_GET_STANDBY(msg, &standby_enable, wfd_res);
-        if(wfd_res == WFD_OK)
-          GST_DEBUG("M12 server set param request STANDBY %s", standby_enable?"ENABLE":"DISABLE");
+
+        WFDCONFIG_GET_STANDBY(wfd_msg, &standby_enable, message_config_error);
+
+        GST_DEBUG_OBJECT (src, "wfd source is entering stanby mode");
       }
 
-      /* DEAD CODE It will be used for UIBC implementation
-      else if(g_strrstr((gchar*)data,"wfd_standby")) {
-        gboolean uibc_enable;
-        wfd_res = wfdconfig_get_uibc_status(msg, &uibc_enable);
-        if(wfd_res == WFD_OK)
-          GST_DEBUG("M15 server set param request for UIBC %s", uibc_enable?"ENABLE":"DISABLE");
-      }*/
+      /* Note : RTSP M14 :
+       */
+      /* Note : wfd-uibc-capability :
+       *   The wfd-uibc-capability parameter describes support for the use input back channel and related attributes.
+       *   The WFD source indicates the TCP port number to be used for UIBC in the tcp-port filed in RTSP M4 and/or M14 request messages.
+       *   The WFD sink uses "none" for the tcp-port filed of the wfd-uibc-capability paramter, in RTSP M3 response and M14 request message.
+       */
+      if(wfd_msg->uibc_capability) {
+        guint32 input_category = 0, input_type = 0, input_type_path_count = 0;
+        WFDHIDCTypePathPair *input_pair =  NULL;
+        guint32 tcp_port = 0;
+
+        WFDCONFIG_GET_UIBC_CAPABILITY(wfd_msg, &input_category, &input_type,& input_pair, &input_type_path_count, &tcp_port, message_config_error);
+      }
+
+      /* Note : RTSP M15 :
+       */
+      /* Note : wfd-uibc-setting :
+       *   The wfd-setting parameter is used to enable and disable the UIBC.
+       *   The wfd-setting parameter may be included in the first RTSP M4 request meesage during the WFD capability negotiation,
+       *     provided that the RTSP M4 request message contains the wfd-uibc-capability parameter.
+       */
+      if(wfd_msg->uibc_setting) {
+        gboolean uibc_enable = TRUE;
+
+        WFDCONFIG_GET_UIBC_STATUS(wfd_msg, &uibc_enable, message_config_error);
+
+        GST_DEBUG_OBJECT ("UIBC is %s", uibc_enable? "enabled" : "disabled");
+      }
+
       break;
     }
 
     default:
     {
-      res = gst_rtsp_message_init_response (&response, GST_RTSP_STS_OK, "OK",
-            request);
+      res = gst_rtsp_message_init_response (&response, GST_RTSP_STS_OK, gst_rtsp_status_as_text (GST_RTSP_STS_OK), request);
       if (res < 0)
         goto send_error;
+
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
+
       break;
     }
   }
 
-  if (src->debug)
-    wfd_rtsp_manager_message_dump (&response);
-
-  res = gst_wfdrtspsrc_connection_send (src, conn, &response, NULL);
+  res = gst_wfdrtspsrc_connection_send (src, conn, &response, src->ptcp_timeout);
   if (res < 0)
     goto send_error;
 
-  /* Handling wfd_trigger_method: PAUSE */
-  if(method == GST_RTSP_SET_PARAMETER && g_strrstr((gchar*)data,"PAUSE")) {
-    GST_DEBUG_OBJECT (src, "trigger PAUSE \n");
-    gst_wfdrtspsrc_loop_send_cmd (src, CMD_PAUSE);
-  }
+done:
+  if (src->debug)
+    wfd_rtsp_manager_message_dump (&response);
 
-  /* Handling wfd_trigger_method: RESUME */
-  if(method == GST_RTSP_SET_PARAMETER && g_strrstr((gchar*)data,"PLAY")) {
-    GST_DEBUG_OBJECT (src, "trigger RESUME \n");
-    gst_wfdrtspsrc_loop_send_cmd (src, CMD_PLAY);
-  }
-
-  /* Handling wfd_trigger_method: TEARDOWN */
-  if(method == GST_RTSP_SET_PARAMETER && g_strrstr((gchar*)data,"TEARDOWN")) {
-    GstBus *bus;
-
-    GST_DEBUG_OBJECT (src, "trigger TEARDOWN \n");
-
-    gst_wfdrtspsrc_loop_send_cmd (src, CMD_CLOSE);
-
-    bus = gst_element_get_bus(GST_ELEMENT_CAST(src));
-    if(!gst_bus_post(bus, gst_message_new_application(GST_OBJECT_CAST(src), gst_structure_new_empty("TEARDOWN")))){
-      GST_ERROR_OBJECT(src, "Failed to send TEARDOWN message\n");
-    }
-    gst_object_unref(bus);
-
-    goto exit;
-  }
-
-  /* Handling wfd_trigger_method: setup */
-  if(method == GST_RTSP_SET_PARAMETER && g_strrstr((gchar*)data,"SETUP")) {
-    src->state = GST_RTSP_STATE_INIT;
-
-    /* setup streams */
-    if (!gst_wfdrtspsrc_setup (src))
-      goto setup_failed;
-
-    src->state = GST_RTSP_STATE_READY;
-  }
-
-exit:
   gst_rtsp_message_unset (request);
   gst_rtsp_message_unset (&response);
+  WFDCONFIG_MESSAGE_FREE(wfd_msg);
 
   return GST_RTSP_OK;
 
   /* ERRORS */
 setup_failed:
   {
+    GST_ERROR_OBJECT(src, "Error: Could not setup(error)");
     gst_rtsp_message_unset (request);
     gst_rtsp_message_unset (&response);
+    WFDCONFIG_MESSAGE_FREE(wfd_msg);
+    return GST_RTSP_ERROR;
+  }
+message_config_error:
+  {
+    GST_ERROR_OBJECT(src, "Error: Message config error (%d)", wfd_res);
+    gst_rtsp_message_unset (request);
+    gst_rtsp_message_unset (&response);
+    WFDCONFIG_MESSAGE_FREE(wfd_msg);
     return GST_RTSP_ERROR;
   }
 send_error:
   {
+    GST_ERROR_OBJECT(src, "Error: Could not send message");
     gst_rtsp_message_unset (request);
     gst_rtsp_message_unset (&response);
-    return res;
-  }
-}
-
-/* send server keep-alive */
-static GstRTSPResult
-gst_wfdrtspsrc_send_keep_alive (GstWFDRTSPSrc * src)
-{
-  GstRTSPMessage request = { 0 };
-  GstRTSPResult res;
-  GstRTSPMethod method;
-  gchar *control;
-
-  GST_INFO_OBJECT (src, "creating server keep-alive");
-
-  /* find a method to use for keep-alive */
-  if (src->methods & GST_RTSP_GET_PARAMETER)
-    method = GST_RTSP_GET_PARAMETER;
-  else
-    method = GST_RTSP_OPTIONS;
-
-  control = src->conninfo.url_str;
-
-  if (control == NULL)
-    goto no_control;
-
-  res = gst_rtsp_message_init_request (&request, method, control);
-  if (res < 0)
-    goto send_error;
-
-  if (src->debug && request.body != NULL)
-    wfd_rtsp_manager_message_dump (&request);
-
-  res =
-      gst_wfdrtspsrc_connection_send (src, src->conninfo.connection, &request,
-      NULL);
-  if (res < 0)
-    goto send_error;
-
-  gst_rtsp_connection_reset_timeout (src->conninfo.connection);
-  gst_rtsp_message_unset (&request);
-
-  return GST_RTSP_OK;
-
-  /* ERRORS */
-no_control:
-  {
-    GST_WARNING_OBJECT (src, "no control url to send keepalive");
-    return GST_RTSP_OK;
-  }
-send_error:
-  {
-    gchar *str = gst_rtsp_strresult (res);
-
-    gst_rtsp_message_unset (&request);
-    GST_ELEMENT_WARNING (src, RESOURCE, WRITE, (NULL),
-        ("Could not send keep-alive. (%s)", str));
-    g_free (str);
+    WFDCONFIG_MESSAGE_FREE(wfd_msg);
     return res;
   }
 }
@@ -2272,9 +2146,8 @@ gst_wfdrtspsrc_loop_send_cmd (GstWFDRTSPSrc * src, gint cmd)
 static GstFlowReturn
 gst_wfdrtspsrc_loop_udp (GstWFDRTSPSrc * src)
 {
-  GstRTSPResult res;
+  GstRTSPResult res = GST_RTSP_OK;
   GstRTSPMessage message = { 0 };
-  gint retry = 0;
 
   while (TRUE) {
     GTimeVal tv_timeout;
@@ -2301,14 +2174,10 @@ gst_wfdrtspsrc_loop_udp (GstWFDRTSPSrc * src)
         /* we got interrupted, see what we have to do */
         goto interrupt;
       case GST_RTSP_ETIMEOUT:
-        /* send keep-alive, ignore the result, a warning will be posted. */
-        GST_DEBUG_OBJECT (src, "timeout, sending keep-alive");
-        if ((res = gst_wfdrtspsrc_send_keep_alive (src)) == GST_RTSP_EINTR)
-          goto interrupt;
-	break;
+        /* timeout */
+        break;
       case GST_RTSP_EEOF:
-        /* server closed the connection. not very fatal for UDP, reconnect and
-         * see what happens. */
+        /* server closed the connection.*/
         GST_ELEMENT_WARNING (src, RESOURCE, READ, (NULL),
             ("The server closed the connection."));
         goto connect_error;
@@ -2330,18 +2199,6 @@ gst_wfdrtspsrc_loop_udp (GstWFDRTSPSrc * src)
       case GST_RTSP_MESSAGE_RESPONSE:
         /* we ignore response and data messages */
         GST_DEBUG_OBJECT (src, "ignoring response message");
-        if (src->debug)
-          wfd_rtsp_manager_message_dump (&message);
-        if (message.type_data.response.code == GST_RTSP_STS_UNAUTHORIZED) {
-          GST_DEBUG_OBJECT (src, "but is Unauthorized response ...");
-          if (gst_wfdrtspsrc_setup_auth (src, &message) && !(retry++)) {
-            GST_DEBUG_OBJECT (src, "so retrying keep-alive");
-            if ((res = gst_wfdrtspsrc_send_keep_alive (src)) == GST_RTSP_EINTR)
-              goto interrupt;
-          }
-        } else {
-          retry = 0;
-        }
         break;
       case GST_RTSP_MESSAGE_DATA:
         /* we ignore response and data messages */
@@ -2750,8 +2607,6 @@ gst_wfdrtspsrc_try_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
   GstRTSPResult res = GST_RTSP_OK;
   GstRTSPStatusCode thecode = GST_RTSP_STS_OK;
 
-  gst_wfd_rtsp_ext_list_before_send (src->extensions, request);
-
   GST_DEBUG_OBJECT (src, "sending message");
 
   if (src->debug)
@@ -2802,8 +2657,6 @@ next:
   if (thecode != GST_RTSP_STS_OK)
     return GST_RTSP_OK;
 
-  gst_wfd_rtsp_ext_list_after_send (src->extensions, request, response);
-
   return GST_RTSP_OK;
 
   /* ERRORS */
@@ -2818,28 +2671,11 @@ send_error:
   }
 receive_error:
   {
-    switch (res) {
-      case GST_RTSP_EEOF:
-        GST_ERROR_OBJECT (src, "server closed connection, doing reconnect");
-#if 0
-        if (try == 0) {
-          try++;
-          /* if reconnect succeeds, try again */
-          if ((res = gst_wfdrtspsrc_conninfo_reconnect (src, &src->conninfo)) == 0)
-            goto again;
-        }
-#endif
-        /* only try once after reconnect, then fallthrough and error out */
-      default:
-      {
-        gchar *str = gst_rtsp_strresult (res);
+    gchar *str = gst_rtsp_strresult (res);
 
-        GST_ELEMENT_ERROR (src, RESOURCE, READ, (NULL),
-            ("Could not receive message. (%s)", str));
-        g_free (str);
-        break;
-      }
-    }
+    GST_ELEMENT_ERROR (src, RESOURCE, READ, (NULL),
+        ("Could not receive message. (%s)", str));
+    g_free (str);
     return res;
   }
 handle_request_failed:
@@ -2945,41 +2781,6 @@ error_response:
         GST_ELEMENT_ERROR (src, RESOURCE, NOT_FOUND, (NULL), ("%s",
                 response->type_data.response.reason));
         break;
-      case GST_RTSP_STS_MOVED_PERMANENTLY:
-      case GST_RTSP_STS_MOVE_TEMPORARILY:
-      {
-        gchar *new_location;
-        GstRTSPLowerTrans transports;
-
-        GST_DEBUG_OBJECT (src, "got redirection");
-        /* if we don't have a Location Header, we must error */
-        if (gst_rtsp_message_get_header (response, GST_RTSP_HDR_LOCATION,
-                &new_location, 0) < 0)
-          break;
-
-        /* When we receive a redirect result, we go back to the INIT state after
-         * parsing the new URI. The caller should do the needed steps to issue
-         * a new setup when it detects this state change. */
-        GST_DEBUG_OBJECT (src, "redirection to %s", new_location);
-
-        /* save current transports */
-        if (src->conninfo.url)
-          transports = src->conninfo.url->transports;
-        else
-          transports = GST_RTSP_LOWER_TRANS_UNKNOWN;
-
-        GError *err = NULL;
-        gst_wfdrtspsrc_uri_set_uri (GST_URI_HANDLER (src), new_location, &err);
-
-        /* set old transports */
-        if (src->conninfo.url && transports != GST_RTSP_LOWER_TRANS_UNKNOWN)
-          src->conninfo.url->transports = transports;
-
-        src->need_redirect = TRUE;
-        src->state = GST_RTSP_STATE_INIT;
-        res = GST_RTSP_OK;
-        break;
-      }
       case GST_RTSP_STS_NOT_ACCEPTABLE:
       case GST_RTSP_STS_NOT_IMPLEMENTED:
       case GST_RTSP_STS_METHOD_NOT_ALLOWED:
@@ -3000,14 +2801,6 @@ error_response:
 
     return res;
   }
-}
-
-static GstRTSPResult
-gst_wfdrtspsrc_send_cb (GstRTSPExtension * ext, GstRTSPMessage * request,
-    GstRTSPMessage * response, GstWFDRTSPSrc * src)
-{
-  return gst_wfdrtspsrc_send (src, src->conninfo.connection, request, response,
-      NULL);
 }
 
 
@@ -3068,7 +2861,7 @@ gst_wfdrtspsrc_parse_methods (GstWFDRTSPSrc * src, GstRTSPMessage * response)
      * at least DESCRIBE, SETUP, we always assume it supports PLAY as
      * well. */
     GST_DEBUG_OBJECT (src, "could not get OPTIONS");
-    src->methods = GST_RTSP_DESCRIBE | GST_RTSP_SETUP;
+    src->methods = GST_RTSP_SETUP;
   }
   /* always assume PLAY, FIXME, extensions should be able to override
    * this */
@@ -3090,16 +2883,9 @@ no_setup:
 static GstRTSPResult
 gst_wfdrtspsrc_create_transports_string (GstWFDRTSPSrc * src, gchar ** transports)
 {
-  GstRTSPResult res = GST_RTSP_OK;
   GString *result;
 
   *transports = NULL;
-
-  res =
-      gst_wfd_rtsp_ext_list_get_transports (src->extensions, GST_RTSP_LOWER_TRANS_UDP, transports);
-
-  if (res < 0)
-    return GST_RTSP_ERROR;
 
   GST_DEBUG_OBJECT (src, "got transports %s", GST_STR_NULL (*transports));
 
@@ -3177,15 +2963,9 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
   manager->control_connection = src->conninfo.connection;
   GST_DEBUG_OBJECT (src, " setup: %p", manager->control_connection);
 
-  /* see if we need to configure this manager */
-  if (!gst_wfd_rtsp_ext_list_configure_stream (src->extensions, manager->caps)) {
-    GST_DEBUG_OBJECT (src, "disabled by extension");
-    goto no_setup;
-  }
-
   /* skip setup if we have no URL for it */
   if (manager->conninfo.location == NULL) {
-    GST_DEBUG_OBJECT (src, "no URL for set.");
+    GST_DEBUG_OBJECT (src, "no URL for setup");
     goto no_setup;
   }
 
@@ -3308,7 +3088,7 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
     gst_rtsp_message_unset (&response);
   }
 
-  gst_wfd_rtsp_ext_list_stream_select (src->extensions, url);
+  src->state = GST_RTSP_STATE_READY;
 
   return TRUE;
 
@@ -3409,10 +3189,15 @@ gst_wfdrtspsrc_retrieve_wifi_parameters (GstWFDRTSPSrc * src)
 
   if(message.type == GST_RTSP_MESSAGE_REQUEST) {
     method = message.type_data.request.method;
-    if(method == GST_RTSP_OPTIONS)
-      gst_wfdrtspsrc_handle_request (src, src->conninfo.connection, &message);
-    else
+    if(method == GST_RTSP_OPTIONS) {
+      res = gst_wfdrtspsrc_handle_request (src, src->conninfo.connection, &message);
+      if (res < GST_RTSP_OK)
+        goto connect_failed;
+    } else
       goto methods_error;
+  } else {
+    GST_ERROR_OBJECT (src, "failed to receive options...");
+    goto methods_error;
   }
 
   /* create OPTIONS */
@@ -3426,8 +3211,8 @@ gst_wfdrtspsrc_retrieve_wifi_parameters (GstWFDRTSPSrc * src)
 
   /* send OPTIONS */
   GST_DEBUG_OBJECT (src, "send options...");
-  if (gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response,
-          NULL) < 0)
+  if ((res = gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response,
+          NULL)) < 0)
     goto send_error;
 
   /* parse OPTIONS */
@@ -3512,14 +3297,13 @@ cleanup_error:
 }
 
 
-
+/* Note : RTSP M1~M6 :
+ *   WFD session capability negotiation
+ */
 static GstRTSPResult
 gst_wfdrtspsrc_open (GstWFDRTSPSrc * src)
 {
   GstRTSPResult res;
-
-  src->methods =
-      GST_RTSP_SETUP | GST_RTSP_PLAY | GST_RTSP_PAUSE | GST_RTSP_TEARDOWN;
 
   if ((res = gst_wfdrtspsrc_retrieve_wifi_parameters (src)) < 0)
     goto open_failed;
@@ -3537,7 +3321,9 @@ open_failed:
   }
 }
 
-
+/* Note : RTSP M8 :
+ *   Send TEARDOWN request to WFD source.
+ */
 static GstRTSPResult
 gst_wfdrtspsrc_close (GstWFDRTSPSrc * src, gboolean only_close)
 {
@@ -3715,6 +3501,9 @@ gst_wfdrtspsrc_parse_rtpinfo (GstWFDRTSPSrc * src, gchar * rtpinfo)
   return TRUE;
 }
 
+/* Note : RTSP M7 :
+ *   Send PLAY request to WFD source. WFD source begins audio and/or video streaming.
+ */
 static GstRTSPResult
 gst_wfdrtspsrc_play (GstWFDRTSPSrc * src)
 {
@@ -3728,9 +3517,6 @@ gst_wfdrtspsrc_play (GstWFDRTSPSrc * src)
   gchar *setup_url;
   GstRTSPConnection *conn;
 
-  src->is_paused = FALSE;
-
-
   GST_DEBUG_OBJECT (src, "PLAY...");
 
   if (!(src->methods & GST_RTSP_PLAY))
@@ -3741,10 +3527,6 @@ gst_wfdrtspsrc_play (GstWFDRTSPSrc * src)
 
   if (!src->conninfo.connection || !src->conninfo.connected)
     goto done;
-
-  /* send some dummy packets before we activate the receive in the
-   * udp sources */
-  gst_wfdrtspsrc_send_dummy_packets (src);
 
   gst_element_set_state (GST_ELEMENT_CAST (src), GST_STATE_PLAYING);
 
@@ -3829,6 +3611,9 @@ send_error:
   }
 }
 
+/* Note : RTSP M9  :
+ *   Send PAUSE request to WFD source. WFD source pauses the audio video stream(s).
+ */
 static GstRTSPResult
 gst_wfdrtspsrc_pause (GstWFDRTSPSrc * src)
 {
@@ -3880,8 +3665,6 @@ gst_wfdrtspsrc_pause (GstWFDRTSPSrc * src)
 
   gst_rtsp_message_unset (&request);
   gst_rtsp_message_unset (&response);
-
-  src->is_paused = TRUE;
 
 no_connection:
   src->state = GST_RTSP_STATE_READY;
@@ -3999,7 +3782,7 @@ gst_wfdrtspsrc_thread (GstWFDRTSPSrc * src)
   gst_wfdrtspsrc_connection_flush (src, FALSE);
 
   /* we allow these to be interrupted */
-  if (cmd == CMD_LOOP || cmd == CMD_PAUSE || cmd == CMD_SET_PARAM )
+  if (cmd == CMD_LOOP || cmd == CMD_PAUSE || cmd == CMD_SEND_REQUEST )
     src->waiting = TRUE;
   GST_OBJECT_UNLOCK (src);
 
@@ -4023,8 +3806,8 @@ gst_wfdrtspsrc_thread (GstWFDRTSPSrc * src)
     case CMD_LOOP:
       running = gst_wfdrtspsrc_loop (src);
       break;
-     case CMD_SET_PARAM:
-      ret = gst_wfdrtspsrc_prepare_set_param (src);
+     case CMD_SEND_REQUEST:
+      ret = gst_wfdrtspsrc_send_request (src);
       if (ret == GST_RTSP_OK)
         running = TRUE;
       break;
@@ -4052,6 +3835,8 @@ gst_wfdrtspsrc_start (GstWFDRTSPSrc * src)
   GST_DEBUG_OBJECT (src, "starting");
 
   GST_OBJECT_LOCK (src);
+
+  src->state = GST_RTSP_STATE_INIT;
 
   src->loop_cmd = CMD_WAIT;
 
@@ -4630,8 +4415,13 @@ gst_wfdrtspsrc_get_audio_parameter(GstWFDRTSPSrc * src, WFDMessage * msg)
   WFDAudioFreq audio_frequency = WFD_FREQ_UNKNOWN;
   guint audio_bitwidth = 0;
   guint32 audio_latency = 0;
+  WFDResult wfd_res = WFD_OK;
 
   WFDCONFIG_GET_PREFERED_AUDIO_FORMAT(msg, &audio_format, &audio_frequency, &audio_channels, &audio_bitwidth, &audio_latency);
+  if(wfd_res != WFD_OK) {
+    GST_ERROR("Failed to get prefered audio format.");
+    return GST_RTSP_ERROR;
+  }
 
   src->audio_format = g_strdup(msg->audio_codecs->list->audio_format);
   if(audio_frequency == WFD_FREQ_48000)
@@ -4672,10 +4462,16 @@ gst_wfdrtspsrc_get_video_parameter(GstWFDRTSPSrc * src, WFDMessage * msg)
   guint32 cslice_enc_params = 0;
   guint cframe_rate_control = 0;
   guint cvLatency = 0;
+  WFDResult wfd_res = WFD_OK;
+
   WFDCONFIG_GET_PREFERED_VIDEO_FORMAT(msg, &cvCodec, &cNative, &cNativeResolution,
       &cCEAResolution, &cVESAResolution, &cHHResolution,
       &cProfile, &cLevel, &cvLatency, &cMaxHeight,
       &cMaxWidth, &cmin_slice_size, &cslice_enc_params, &cframe_rate_control);
+  if(wfd_res != WFD_OK) {
+      GST_ERROR("Failed to get prefered video format.");
+      return GST_RTSP_ERROR;
+  }
 #if 0
   switch(cNative)
   {

@@ -1219,9 +1219,11 @@ gst_wfd_h264_parser_parse_nal (GstWFDH264NalParser * nalparser, GstWFDH264NalUni
 
   switch (nalu->type) {
     case GST_H264_NAL_SPS:
+      memset(&sps, 0, sizeof(GstWFDH264SPS));
       return gst_wfd_h264_parser_parse_sps (nalparser, nalu, &sps, FALSE);
       break;
     case GST_H264_NAL_PPS:
+      memset(&pps, 0, sizeof(GstWFDH264PPS));
       return gst_wfd_h264_parser_parse_pps (nalparser, nalu, &pps);
   }
 
