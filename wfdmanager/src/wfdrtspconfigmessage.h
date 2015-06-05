@@ -36,7 +36,9 @@ G_BEGIN_DECLS
  */
 typedef enum {
   WFD_OK     = 0,
-  WFD_EINVAL = -1
+  WFD_EINVAL = -1,
+  WFD_NOT_IMPLEMENTED = -2,
+  WFD_NOT_SUPPORTED = -3
 } WFDResult;
 
 typedef enum {

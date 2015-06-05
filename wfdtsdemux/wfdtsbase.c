@@ -867,6 +867,9 @@ wfd_ts_base_apply_pmt (WFDTSBase * base, GstWFDTSSection * section)
   /* If the current program is active, this means we have a new program */
   if (old_program->active) {
     old_program = wfd_ts_base_steal_program (base, program_number);
+    if(G_UNLIKELY (old_program == NULL))
+      goto no_program;
+
     program = wfd_ts_base_new_program (base, program_number, section->pid);
     g_hash_table_insert (base->programs,
         GINT_TO_POINTER (program_number), program);

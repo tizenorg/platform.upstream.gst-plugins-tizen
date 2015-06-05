@@ -1961,7 +1961,8 @@ calculate_and_push_newsegment (GstWFDTSDemux * demux, WFDTSDemuxStream * stream)
 
   if (!demux->segment_event) {
     demux->segment_event = gst_event_new_segment (&demux->segment);
-    GST_EVENT_SEQNUM (demux->segment_event) = base->last_seek_seqnum;
+    if(demux->segment_event)
+      GST_EVENT_SEQNUM (demux->segment_event) = base->last_seek_seqnum;
   }
 
 push_new_segment:
