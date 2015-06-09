@@ -55,6 +55,7 @@
 #include <xf86drm.h>
 #include <sys/mman.h>
 #include <exynos_drm.h>
+#include <mm_types.h>
 
 GST_DEBUG_CATEGORY_STATIC (xvimagesrc_debug);
 #define GST_CAT_DEFAULT xvimagesrc_debug
@@ -186,7 +187,7 @@ gchar old_time[10] = { 0, };
 
 static gboolean error_caught = FALSE;
 
-#define BUFFER_COND_WAIT_TIMEOUT            1000000
+#define BUFFER_COND_WAIT_TIMEOUT            (1 * G_TIME_SPAN_SECOND)
 //#define GST_TYPE_GST_XV_IMAGE_OUT_BUFFER               (gst_xv_image_out_buffer_get_type())
 //#define GST_IS_GST_XV_IMAGE_OUT_BUFFER(obj)            (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_GST_XV_IMAGE_OUT_BUFFER))
 //static void gst_xv_image_out_buffer_finalize (GstXvImageOutBuffer * buffer);
@@ -507,23 +508,16 @@ gst_xv_image_src_init (GstXVImageSrc * src)
   src->bo = NULL;
   src->dri2_buffers = NULL;
   src->buf_share_method = BUF_SHARE_METHOD_TIZEN_BUFFER;
-  //src->queue_lock = g_mutex_new ();
   g_mutex_init (&src->queue_lock);
   src->queue = g_queue_new ();
-  //src->queue_cond = g_cond_new ();
   g_cond_init (&src->queue_cond);
-  //src->cond_lock = g_mutex_new ();
   g_mutex_init (&src->cond_lock);
-  //src->buffer_cond = g_cond_new ();
-  //src->buffer_cond_lock = g_mutex_new ();
+
   g_cond_init (&src->buffer_cond);
   g_mutex_init (&src->buffer_cond_lock);
-  //src->dpy_lock = g_mutex_new ();
   g_mutex_init (&src->dpy_lock);
 
   src->pause_cond_var = FALSE;
-  //src->pause_cond = g_cond_new ();
-  //src->pause_lock = g_mutex_new ();
   g_cond_init (&src->pause_cond);
   g_mutex_init (&src->pause_lock);
 
@@ -546,6 +540,11 @@ gst_xv_image_src_finalize (GObject * gobject)
 {
   GstXVImageSrc *src = GST_XV_IMAGE_SRC (gobject);
   GST_DEBUG_OBJECT (src, "finalize");
+  g_mutex_clear (&src->queue_lock);
+  g_mutex_clear (&src->pause_lock);
+  g_mutex_clear (&src->dpy_lock);
+  g_mutex_clear (&src->cond_lock);
+  g_mutex_clear (&src->buffer_cond_lock);
   drm_finalize (src);
   G_OBJECT_CLASS (parent_class)->finalize (gobject);
 }
@@ -907,7 +906,6 @@ gst_xv_image_src_create (GstPushSrc * psrc, GstBuffer ** buffer)
 
   if (g_queue_is_empty (src->queue)) {
     g_mutex_unlock (&src->queue_lock);
-
     g_mutex_lock (&src->cond_lock);
     g_cond_wait (&src->queue_cond, &src->cond_lock);
     g_mutex_unlock (&src->cond_lock);
@@ -928,7 +926,7 @@ gst_xv_image_src_create (GstPushSrc * psrc, GstBuffer ** buffer)
   if (outbuf == NULL)
     return GST_FLOW_ERROR;
 
-  GST_WARNING ("gem_name=%d, fd_name=%d, Time stamp of the buffer is %"
+  GST_INFO_OBJECT (src, "gem_name=%d, fd_name=%d, Time stamp of the buffer is %"
       GST_TIME_FORMAT, outbuf->YBuf, outbuf->fd_name,
       GST_TIME_ARGS (GST_BUFFER_TIMESTAMP (outbuf->buffer)));
 
@@ -956,8 +954,11 @@ xvimagesrc_thread_start (GstXVImageSrc * src)
   GError *error;
   if (!src->updates_thread) {
     src->updates_thread =
+        g_thread_new ("xvimagecapture", (GThreadFunc) gst_xv_image_src_update_thread, src);
+#if 0
         g_thread_create ((GThreadFunc) gst_xv_image_src_update_thread, src,
         TRUE, &error);
+#endif
 
     GST_WARNING_OBJECT (src, "image capture thread start");
   } else {
@@ -1160,6 +1161,8 @@ gst_xv_image_src_update_thread (void *asrc)
     outbuf = NULL;
 
     if (pause_trigger) {
+      g_cond_signal (&src->queue_cond);
+
       GST_WARNING_OBJECT (src, "PAUSED in capture thread");
       g_mutex_lock (&src->pause_lock);
       g_cond_wait (&src->pause_cond, &src->pause_lock);
@@ -1192,16 +1195,10 @@ gst_xv_image_src_update_thread (void *asrc)
       error_caught = FALSE;
       XSetErrorHandler (handler);
 
-#if 1
       timeout = g_get_monotonic_time () + BUFFER_COND_WAIT_TIMEOUT;
-#else
-      g_get_current_time (&timeout);
-      g_time_val_add (&timeout, BUFFER_COND_WAIT_TIMEOUT);
-#endif
 
       g_mutex_lock (&src->buffer_cond_lock);
-      if (!g_cond_wait_until (&src->buffer_cond, &src->buffer_cond_lock,
-              timeout)) {
+      if (!g_cond_wait_until (&src->buffer_cond, &src->buffer_cond_lock, timeout)) {
         GST_ERROR ("skip wating");
       } else {
         GST_ERROR ("Signal received");
@@ -1287,8 +1284,8 @@ gst_xv_image_src_update_thread (void *asrc)
         tmp_data = (void *)malloc(buf_size_Y+buf_size_Cb);
         memset (tmp_data, 0x00, buf_size_Y+buf_size_Cb);
 
-        memcpy (tmp_data, psimgb->a[0], buf_size_Y);
-        memcpy (tmp_data+buf_size_Y, psimgb->a[1], buf_size_Cb);
+        memcpy (tmp_data, mm_video_buf->data[0], buf_size_Y);
+        memcpy (tmp_data+buf_size_Y, mm_video_buf->data[1], buf_size_Cb);
 
         outbuf->buffer = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
             tmp_data, buf_size_Y+buf_size_Cb, 0, buf_size_Y+buf_size_Cb, (gpointer) outbuf,
@@ -1302,8 +1299,8 @@ gst_xv_image_src_update_thread (void *asrc)
 
         GstMapInfo map;
         gst_buffer_map (new_buf, &map, GST_MAP_READ);
-        memcpy (map.data, psimgb->a[0], buf_size_Y);
-        memcpy (map.data+buf_size_Y, psimgb->a[1], buf_size_Cb);
+        memcpy (map.data, mm_video_buf->data[0], buf_size_Y);
+        memcpy (map.data+buf_size_Y, mm_video_buf->data[1], buf_size_Cb);
 
         outbuf->buffer = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
             map.data, buf_size_Y+buf_size_Cb, 0, buf_size_Y+buf_size_Cb, (gpointer) outbuf,
@@ -1329,70 +1326,71 @@ gst_xv_image_src_update_thread (void *asrc)
       else if (error == XV_VERSION_MISMATCH)
         GST_ERROR ("XV_VERSION_MISMATCH\n");
       else {
-        SCMN_IMGB *psimgb = NULL;
-        psimgb = (SCMN_IMGB *) malloc (sizeof (SCMN_IMGB));
-        if (psimgb == NULL) {
-          GST_ERROR_OBJECT (src, "failed to alloc SCMN_IMGB");
+        MMVideoBuffer *mm_video_buf = NULL;
+        mm_video_buf = (MMVideoBuffer *) malloc (sizeof (MMVideoBuffer));
+        if (mm_video_buf == NULL) {
+          GST_ERROR_OBJECT (src, "failed to alloc MMVideoBuffer");
           return NULL;
         }
-        memset (psimgb, 0x00, sizeof (SCMN_IMGB));
+        memset (mm_video_buf, 0x00, sizeof (MMVideoBuffer));
         if (data->BufType == XV_BUF_TYPE_LEGACY) {
-          psimgb->p[0] = (void *) data->YBuf;
-          psimgb->p[1] = (void *) data->CbBuf;
-          psimgb->buf_share_method = BUF_SHARE_METHOD_PADDR;
-          psimgb->a[0] = NULL;
-          psimgb->a[1] = NULL;
+          GST_DEBUG ("XV_BUF_TYPE_LEGACY");
+          mm_video_buf->handle.paddr[0] = (void *) data->YBuf;
+          mm_video_buf->handle.paddr[1] = (void *) data->CbBuf;
+          mm_video_buf->type = MM_VIDEO_BUFFER_TYPE_PHYSICAL_ADDRESS;
+          mm_video_buf->data[0] = NULL;
+          mm_video_buf->data[1] = NULL;
         } else if (data->BufType == XV_BUF_TYPE_DMABUF) {
           if (src->buf_share_method == BUF_SHARE_METHOD_FD) {
-            psimgb->dmabuf_fd[0] =
+            mm_video_buf->handle.dmabuf_fd[0] =
                 drm_convert_gem_to_fd (&src->gemname_cnt, src->drm_fd, data->YBuf,
                 xv_gem_mmap, &virtual_address, &buf_size_Y);
-            psimgb->a[0] = virtual_address;
+            mm_video_buf->data[0] = virtual_address;
             GST_WARNING_OBJECT (src,
                 "YBuf gem to dmabuf_fd[0]:%d virtual_address : %p size : %d",
-                psimgb->dmabuf_fd[0], psimgb->a[0], buf_size_Y);
+                mm_video_buf->handle.dmabuf_fd[0], mm_video_buf->data[0], buf_size_Y);
 
-            psimgb->dmabuf_fd[1] =
+            mm_video_buf->handle.dmabuf_fd[1] =
                 drm_convert_gem_to_fd (&src->gemname_cnt, src->drm_fd,
                 data->CbBuf, xv_gem_mmap, &virtual_address, &buf_size_Cb);
-            psimgb->a[1] = virtual_address;
+            mm_video_buf->data[1] = virtual_address;
             GST_WARNING_OBJECT (src,
                 "CbBuf gem to dmabuf_fd[1]:%d  virtual_address : %p size: %d",
-                psimgb->dmabuf_fd[1], psimgb->a[1], buf_size_Cb);
-            psimgb->buf_share_method = BUF_SHARE_METHOD_FD;
+                mm_video_buf->handle.dmabuf_fd[1], mm_video_buf->data[1], buf_size_Cb);
+            mm_video_buf->type = MM_VIDEO_BUFFER_TYPE_DMABUF_FD;
           } else if (src->buf_share_method == BUF_SHARE_METHOD_TIZEN_BUFFER) {
-            psimgb->buf_share_method = BUF_SHARE_METHOD_TIZEN_BUFFER;
-            psimgb->bo[0] = drm_convert_gem_to_bo (src->bufmgr, data->YBuf);
-            psimgb->bo[1] = drm_convert_gem_to_bo (src->bufmgr, data->CbBuf);
-            GST_WARNING_OBJECT (src, "BO : %p %p", psimgb->bo[0], psimgb->bo[1]);
+            mm_video_buf->type = MM_VIDEO_BUFFER_TYPE_TBM_BO;
+            mm_video_buf->handle.bo[0] = drm_convert_gem_to_bo (src->bufmgr, data->YBuf);
+            mm_video_buf->handle.bo[1] = drm_convert_gem_to_bo (src->bufmgr, data->CbBuf);
+            GST_WARNING_OBJECT (src, "BO : %p %p", mm_video_buf->handle.bo[0], mm_video_buf->handle.bo[1]);
 
-            outbuf->bo[0] = psimgb->bo[0];
-            outbuf->bo[1] = psimgb->bo[1];
+            outbuf->bo[0] = mm_video_buf->handle.bo[0];
+            outbuf->bo[1] = mm_video_buf->handle.bo[1];
           }
         }
 
-        psimgb->w[0] = src->width;
-        psimgb->h[0] = src->height;
-        psimgb->cs = SCMN_CS_NV12;
-        psimgb->w[1] = src->width;
-        psimgb->h[1] = src->height >> 1;
+        mm_video_buf->width[0] = src->width;
+        mm_video_buf->height[0] = src->height;
+        mm_video_buf->format = MM_PIXEL_FORMAT_NV12;
+        mm_video_buf->width[1] = src->width;
+        mm_video_buf->height[1] = src->height >> 1;
 
-        psimgb->s[0] = GST_ROUND_UP_16 (psimgb->w[0]);
-        psimgb->e[0] = GST_ROUND_UP_16 (psimgb->h[0]);
-        psimgb->s[1] = GST_ROUND_UP_16 (psimgb->w[1]);
-        psimgb->e[1] = GST_ROUND_UP_16 (psimgb->h[1]);
+        mm_video_buf->stride_width[0] = GST_ROUND_UP_16 (mm_video_buf->width[0]);
+        mm_video_buf->stride_height[0] = GST_ROUND_UP_16 (mm_video_buf->height[0]);
+        mm_video_buf->stride_width[1] = GST_ROUND_UP_16 (mm_video_buf->width[1]);
+        mm_video_buf->stride_height[1] = GST_ROUND_UP_16 (mm_video_buf->height[1]);
 
-        psimgb->tz_enable = 0;
+        mm_video_buf->is_secured = 0;
 
         outbuf->buffer = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
             src->virtual, src->framesize, 0, src->framesize, (gpointer) outbuf,
             gst_xv_image_out_buffer_unref);
         gst_buffer_append_memory (outbuf->buffer,
-            gst_memory_new_wrapped (GST_MEMORY_FLAG_READONLY, psimgb,
-                sizeof (*psimgb), 0, sizeof (*psimgb), psimgb, g_free));
+            gst_memory_new_wrapped (GST_MEMORY_FLAG_READONLY, mm_video_buf,
+                sizeof (*mm_video_buf), 0, sizeof (*mm_video_buf), mm_video_buf, g_free));
 
         outbuf->YBuf = data->YBuf;
-        outbuf->fd_name = psimgb->dmabuf_fd[0];
+        outbuf->fd_name = mm_video_buf->handle.dmabuf_fd[0];
 
 #ifdef DEBUG_BUFFER
         for (i = 0; i < 5; i++) {
@@ -1418,10 +1416,10 @@ gst_xv_image_src_update_thread (void *asrc)
             if (virtual_address == NULL) {
               GST_ERROR ("Mem virtual is NULL[%d]", f_idx);
             } else {
-              //memcpy(g_dump_frame[f_idx++], psimgb->a[0], YUV_720_FRAME_SIZE);
+              //memcpy(g_dump_frame[f_idx++], mm_video_buf->data[0], YUV_720_FRAME_SIZE);
               //memcpy(g_dump_frame[f_idx++], virtual_address, YUV_VGA_FRAME_SIZE);
-              memcpy (g_dump_frame[f_idx], psimgb->a[0], 921600);
-              memcpy (g_dump_frame1[f_idx], psimgb->a[1], 462848);
+              memcpy (g_dump_frame[f_idx], mm_video_buf->data[0], 921600);
+              memcpy (g_dump_frame1[f_idx], mm_video_buf->data[1], 462848);
               f_idx++;
               GST_ERROR ("Mem copy done[%d]", f_idx);
             }

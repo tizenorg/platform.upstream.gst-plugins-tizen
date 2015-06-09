@@ -98,6 +98,7 @@ XV_VALIDATE_DATA (XV_DATA_PTR data)
     return XV_OK;
 }
 
+#if 0
 /* max channel count *********************************************************/
 #define SCMN_IMGB_MAX_PLANE         (4)
 
@@ -164,6 +165,6 @@ typedef struct
     /* TZ memory buffer */
     int tz_enable;
 } SCMN_IMGB;
-
+#endif
 #endif
 
