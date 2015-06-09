@@ -26,6 +26,7 @@ G_BEGIN_DECLS
 #include <gst/gst.h>
 #include <gst/base/gstpushsrc.h>
 #include <wayland-client.h>
+#include <tbm_bufmgr.h>
 #define GST_TYPE_WAYLAND_SRC \
 	    (gst_wayland_src_get_type())
 #define GST_WAYLAND_SRC(obj) \
@@ -56,11 +57,40 @@ struct output
 struct output_buffer
 {
   struct output *output;
+
+  /* for shm buffer */
   void *data;
+
+  /* for tbm buffer */
+  tbm_bo bo[2];
+
   struct wl_buffer *wl_buffer;
   GstBuffer *gst_buffer;
   int stride, size, offset;
   struct wl_list link;
+};
+
+struct tbm_buffer_format
+{
+  guint32 format;
+  struct wl_list link;
+};
+
+struct tbm_buffer_pool_data
+{
+  guint32 name;
+  GstWaylandSrc *src;
+
+  gint has_capability;
+  struct wl_list support_format_list;
+
+  /* drm */
+  gchar *device_name;
+  gint drm_fd;
+  gint authenticated;
+
+  /* tbm */
+  tbm_bufmgr bufmgr;
 };
 
 /*
@@ -85,7 +115,7 @@ struct _GstWaylandSrc
   struct tizen_screenshooter *screenshooter;
   struct tizen_screenmirror *screenmirror;
   struct shm_pool *shm_pool;
-  guint output_num;
+  gboolean use_tbm;
   guint fps_n;
   guint fps_d;
   gint64 last_frame_no;
@@ -99,6 +129,11 @@ struct _GstWaylandSrc
   GCond queue_cond;
   GThread *updates_thread;
   gboolean thread_return;
+
+  guint width;
+  guint height;
+  guint32 format;
+  struct tizen_buffer_pool *tbm_buffer_pool;
 };
 
 struct _GstWaylandSrcClass

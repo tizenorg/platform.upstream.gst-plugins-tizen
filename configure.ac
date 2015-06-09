@@ -168,6 +168,9 @@ PKG_CHECK_MODULES(TBM, libtbm)
 AC_SUBST(TBM_CFLAGS)
 AC_SUBST(TBM_LIBS)
 
+PKG_CHECK_MODULES(MMCOMMON,mm-common)
+AC_SUBST(MMCOMMON_CFLAGS)
+
 dnl required package for evasimagesink/evaspixmapsink
 PKG_CHECK_MODULES(EFL, [
   evas >= $EFL_REQUIRED

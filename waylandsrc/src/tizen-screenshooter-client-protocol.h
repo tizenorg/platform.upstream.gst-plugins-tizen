@@ -63,6 +63,15 @@ extern "C"
   };
 #endif /* TIZEN_SCREENMIRROR_CONTENT_ENUM */
 
+#ifndef TIZEN_SCREENMIRROR_STRETCH_ENUM
+#define TIZEN_SCREENMIRROR_STRETCH_ENUM
+  enum tizen_screenmirror_stretch
+  {
+    TIZEN_SCREENMIRROR_STRETCH_KEEP_RATIO = 0,
+    TIZEN_SCREENMIRROR_STRETCH_FULLY = 1,
+  };
+#endif /* TIZEN_SCREENMIRROR_STRETCH_ENUM */
+
 /**
  * tizen_screenmirror - interface for screenmirror
  * @dequeued: dequeued event
@@ -113,10 +122,11 @@ extern "C"
   }
 
 #define TIZEN_SCREENMIRROR_DESTROY	0
-#define TIZEN_SCREENMIRROR_QUEUE	1
-#define TIZEN_SCREENMIRROR_DEQUEUE	2
-#define TIZEN_SCREENMIRROR_START	3
-#define TIZEN_SCREENMIRROR_STOP	4
+#define TIZEN_SCREENMIRROR_SET_STRETCH	1
+#define TIZEN_SCREENMIRROR_QUEUE	2
+#define TIZEN_SCREENMIRROR_DEQUEUE	3
+#define TIZEN_SCREENMIRROR_START	4
+#define TIZEN_SCREENMIRROR_STOP	5
 
   static inline void
       tizen_screenmirror_set_user_data (struct tizen_screenmirror
@@ -138,6 +148,14 @@ extern "C"
         TIZEN_SCREENMIRROR_DESTROY);
 
     wl_proxy_destroy ((struct wl_proxy *) tizen_screenmirror);
+  }
+
+  static inline void
+      tizen_screenmirror_set_stretch (struct tizen_screenmirror
+      *tizen_screenmirror, uint32_t stretch)
+  {
+    wl_proxy_marshal ((struct wl_proxy *) tizen_screenmirror,
+        TIZEN_SCREENMIRROR_SET_STRETCH, stretch);
   }
 
   static inline void

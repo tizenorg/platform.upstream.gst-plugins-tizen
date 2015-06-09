@@ -39,32 +39,42 @@
 #include <unistd.h>
 #include <poll.h>
 #include <gst/video/video-format.h>
+#include <xf86drm.h>
+#include <mm_types.h>
 #include "tizen-screenshooter-client-protocol.h"
+#include "tizen-buffer-pool-client-protocol.h"
 #include "gstwaylandsrc.h"
 
 GST_DEBUG_CATEGORY_STATIC (waylandsrc_debug);
 #define GST_CAT_DEFAULT waylandsrc_debug
 
-#if G_BYTE_ORDER == G_BIG_ENDIAN
-#define GST_WAYLAND_SRC_VIDEO_FORMAT "ARGB"
-#else
-//#define GST_WAYLAND_SRC_VIDEO_FORMAT "BGRA"
-#define GST_WAYLAND_SRC_VIDEO_FORMAT "ARGB"
-#endif
+#define NUM_BUFFERS 3
+#define DEFAULT_WIDTH 640
+#define DEFAULT_HEIGHT 480
 
-#define NUM_BUFFERS 5
+#define C(b,m)              (char)(((b) >> (m)) & 0xFF)
+#define B(c,s)              ((((unsigned int)(c)) & 0xff) << (s))
+#define FOURCC(a,b,c,d)     (B(d,24) | B(c,16) | B(b,8) | B(a,0))
+#define FOURCC_STR(id)      C(id,0), C(id,8), C(id,16), C(id,24)
+#define FOURCC_ARGB         FOURCC('A','R','G','B')
+#define FOURCC_RGB32        FOURCC('R','G','B','4')
+#define FOURCC_I420         FOURCC('I','4','2','0')
+#define FOURCC_NV12         FOURCC('N','V','1','2')
+#define FOURCC_SN12         FOURCC('S','N','1','2')
+#define FOURCC_ST12         FOURCC('S','T','1','2')
 
 static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_WAYLAND_SRC_VIDEO_FORMAT))
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("ARGB") ";"
+        GST_VIDEO_CAPS_MAKE ("NV12") ";" GST_VIDEO_CAPS_MAKE ("SN12"))
     );
 
 enum
 {
   PROP_0,
   PROP_DISPLAY_NAME,
-  PROP_OUTPUT_NUM
+  PROP_USE_TBM
 };
 
 /*Fixme: Add more interfaces */
@@ -90,8 +100,6 @@ gst_wayland_src_get_property (GObject * object, guint prop_id, GValue * value,
     GParamSpec * pspec);
 
 static GstCaps *gst_wayland_src_fixate (GstBaseSrc * bsrc, GstCaps * caps);
-
-static GstCaps *gst_wayland_src_get_caps (GstBaseSrc * psrc, GstCaps * filter);
 
 static gboolean gst_wayland_src_set_caps (GstBaseSrc * psrc, GstCaps * caps);
 
@@ -194,10 +202,9 @@ mirror_handle_dequeued (void *data,
 
       next_frame_no += 1;
       next_capture_ts = gst_util_uint64_scale (next_frame_no,
-        src->fps_d * GST_SECOND, src->fps_n);
+          src->fps_d * GST_SECOND, src->fps_n);
 
-      id = gst_clock_new_single_shot_id (clock, next_capture_ts +
-        base_time);
+      id = gst_clock_new_single_shot_id (clock, next_capture_ts + base_time);
 
       GST_DEBUG_OBJECT (src, "Waiting for next frame time %" G_GUINT64_FORMAT,
           next_capture_ts);
@@ -205,7 +212,7 @@ mirror_handle_dequeued (void *data,
 
       gst_clock_id_unref (id);
       if (ret == GST_CLOCK_UNSCHEDULED) {
-        /* Got woken up by the unlock function */
+        /* Gotjwoken up by the unlock function */
         GST_ERROR_OBJECT (src, "GST_CLOCK_UNSCHEDULED returned");
         continue;
       }
@@ -216,10 +223,64 @@ mirror_handle_dequeued (void *data,
     GST_DEBUG ("Buffer [%d] dequeued",
         wl_proxy_get_id ((struct wl_proxy *) buffer));
     out_buffer->gst_buffer = gst_buffer_new ();
-    gst_buffer_append_memory (out_buffer->gst_buffer,
-        gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE, out_buffer->data,
-            out_buffer->size, 0, out_buffer->size, (gpointer) out_buffer,
-            gst_wayland_src_gst_buffer_unref));
+
+    if (src->use_tbm) {
+      if (src->format == TIZEN_BUFFER_POOL_FORMAT_ARGB8888) {
+        gst_buffer_append_memory (out_buffer->gst_buffer,
+            gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
+                tbm_bo_map(out_buffer->bo[0], TBM_DEVICE_CPU, TBM_OPTION_READ).ptr,
+                out_buffer->size, 0, out_buffer->size, (gpointer) out_buffer,
+                gst_wayland_src_gst_buffer_unref));
+      } else if (src->format == TIZEN_BUFFER_POOL_FORMAT_NV12) {
+#ifndef USE_MM_VIDEO_BUFFER
+        gst_buffer_append_memory (out_buffer->gst_buffer,
+            gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
+                tbm_bo_map(out_buffer->bo[0], TBM_DEVICE_CPU, TBM_OPTION_READ).ptr,
+                tbm_bo_size(out_buffer->bo[0]), 0, tbm_bo_size(out_buffer->bo[0]),
+                (gpointer) out_buffer, gst_wayland_src_gst_buffer_unref));
+        gst_buffer_append_memory (out_buffer->gst_buffer,
+            gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
+                tbm_bo_map(out_buffer->bo[1], TBM_DEVICE_CPU, TBM_OPTION_READ).ptr,
+                tbm_bo_size(out_buffer->bo[1]), 0, tbm_bo_size(out_buffer->bo[1]),
+                (gpointer) out_buffer, NULL));
+#else
+        MMVideoBuffer *mm_video_buf = NULL;
+        mm_video_buf = (MMVideoBuffer *) malloc (sizeof (MMVideoBuffer));
+        if (mm_video_buf == NULL) {
+          GST_ERROR_OBJECT (src, "failed to alloc MMVideoBuffer");
+          return;
+        }
+
+        memset (mm_video_buf, 0x00, sizeof (MMVideoBuffer));
+
+        mm_video_buf->type = MM_VIDEO_BUFFER_TYPE_TBM_BO;
+        mm_video_buf->handle.bo[0] = out_buffer->bo[0];
+        mm_video_buf->handle.bo[1] = out_buffer->bo[1];
+        GST_INFO_OBJECT (src, "BO : %p %p", mm_video_buf->handle.bo[0], mm_video_buf->handle.bo[1]);
+
+        mm_video_buf->width[0] = src->width;
+        mm_video_buf->height[0] = src->height;
+        mm_video_buf->format = MM_PIXEL_FORMAT_NV12;
+        mm_video_buf->width[1] = src->width;
+        mm_video_buf->height[1] = src->height >> 1;
+        mm_video_buf->stride_width[0] = GST_ROUND_UP_16 (mm_video_buf->width[0]);
+        mm_video_buf->stride_height[0] = GST_ROUND_UP_16 (mm_video_buf->height[0]);
+        mm_video_buf->stride_width[1] = GST_ROUND_UP_16 (mm_video_buf->width[1]);
+        mm_video_buf->stride_height[1] = GST_ROUND_UP_16 (mm_video_buf->height[1]);
+        mm_video_buf->is_secured = 0;
+
+        gst_buffer_append_memory (out_buffer->gst_buffer,
+            gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
+                mm_video_buf, sizeof (*mm_video_buf), 0, sizeof (*mm_video_buf),
+                (gpointer) out_buffer, gst_wayland_src_gst_buffer_unref));
+#endif
+      }
+    } else {
+      gst_buffer_append_memory (out_buffer->gst_buffer,
+          gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE, out_buffer->data,
+              out_buffer->size, 0, out_buffer->size, (gpointer) out_buffer,
+              gst_wayland_src_gst_buffer_unref));
+    }
 
     gst_buffer = out_buffer->gst_buffer;
     GST_BUFFER_DTS (gst_buffer) = GST_CLOCK_TIME_NONE;
@@ -292,14 +353,14 @@ make_shm_pool (struct wl_shm *shm, int size, void **data)
 }
 
 static struct output_buffer *
-shm_buffer_create (struct wl_shm *shm, size_t width, size_t height)
+shm_buffer_create (struct wl_shm *shm, gsize width, gsize height)
 {
   struct output_buffer *out_buffer = NULL;
   struct wl_shm_pool *pool = NULL;
   void *data = NULL;
-  size_t block_size = 0, stride = 0;
+  gsize block_size = 0, stride = 0;
 
-  out_buffer = malloc (sizeof *out_buffer);
+  out_buffer = g_malloc0 (sizeof *out_buffer);
   if (!out_buffer)
     return NULL;
 
@@ -317,10 +378,267 @@ shm_buffer_create (struct wl_shm *shm, size_t width, size_t height)
   out_buffer->size = block_size;
   out_buffer->stride = stride;
   out_buffer->data = data;
+  out_buffer->bo[0] = NULL;
+  out_buffer->bo[1] = NULL;
 
   wl_shm_pool_destroy (pool);
 
   return out_buffer;
+}
+
+static gboolean
+check_format (GstWaylandSrc * src)
+{
+  struct tbm_buffer_pool_data *pdata = NULL;
+  struct tbm_buffer_format *fmt;
+
+  pdata = tizen_buffer_pool_get_user_data (src->tbm_buffer_pool);
+  if (pdata == NULL) {
+    GST_ERROR_OBJECT (src, "TBM buffer pool DATA is NULL");
+    return FALSE;
+  }
+
+  wl_list_for_each (fmt, &pdata->support_format_list, link)
+      if (fmt->format == src->format)
+    return TRUE;
+
+  return FALSE;
+}
+
+static void
+destroy_buffer (struct output_buffer *obuffer)
+{
+  if (!obuffer)
+    return;
+
+  if (obuffer->wl_buffer)
+    wl_buffer_destroy (obuffer->wl_buffer);
+  if (obuffer->bo[0])
+    tbm_bo_unref (obuffer->bo[0]);
+  if (obuffer->bo[1])
+    tbm_bo_unref (obuffer->bo[1]);
+  if (obuffer->data)
+    munmap (obuffer->data, obuffer->size);
+
+  wl_list_remove (&obuffer->link);
+  free (obuffer);
+}
+
+static void
+destroy_mirror_buffer_pool (struct tizen_buffer_pool *pool)
+{
+  struct tbm_buffer_pool_data *pdata = tizen_buffer_pool_get_user_data (pool);
+
+  if (pdata) {
+    struct tbm_buffer_format *fmt, *ff;
+
+    wl_list_for_each_safe (fmt, ff, &pdata->support_format_list, link) {
+      wl_list_remove (&fmt->link);
+      free (fmt);
+    }
+    if (pdata->bufmgr)
+      tbm_bufmgr_deinit (pdata->bufmgr);
+    if (pdata->drm_fd >= 0)
+      close (pdata->drm_fd);
+    if (pdata->device_name)
+      free (pdata->device_name);
+    free (pdata);
+  }
+
+  tizen_buffer_pool_destroy (pool);
+}
+
+static void
+buffer_pool_handle_device (void *data,
+    struct tizen_buffer_pool *tizen_buffer_pool, const char *device_name)
+{
+  struct tbm_buffer_pool_data *pdata = (struct tbm_buffer_pool_data *) data;
+
+  if (pdata == NULL) {
+    GST_INFO ("Name");
+    return;
+  }
+  if (device_name == NULL) {
+    GST_INFO ("Name");
+    return;
+  }
+
+  pdata->device_name = strdup (device_name);
+  GST_INFO ("Name : %d, device name : %s", pdata->name, pdata->device_name);
+}
+
+static void
+buffer_pool_handle_authenticated (void *data,
+    struct tizen_buffer_pool *tizen_buffer_pool)
+{
+  struct tbm_buffer_pool_data *pdata = (struct tbm_buffer_pool_data *) data;
+
+  GST_INFO ("Name");
+  if (pdata == NULL)
+    return;
+
+  /* authenticated */
+  pdata->authenticated = 1;
+  GST_INFO ("Name : %d", pdata->name);
+}
+
+static void
+buffer_pool_handle_capabilities (void *data,
+    struct tizen_buffer_pool *tizen_buffer_pool, uint32_t value)
+{
+  struct tbm_buffer_pool_data *pdata = (struct tbm_buffer_pool_data *) data;
+  drm_magic_t magic;
+  GstWaylandSrc *src = pdata->src;
+
+  if (pdata == NULL)
+    return;
+
+  GST_INFO ("Name : %d Value : %x", pdata->name, value);
+
+  /* check if buffer_pool has screenmirror capability */
+  if (!(value & TIZEN_BUFFER_POOL_CAPABILITY_SCREENMIRROR))
+    return;
+
+  pdata->has_capability = 1;
+
+  /* do authenticate only if a pool has the video capability */
+#ifdef O_CLOEXEC
+  pdata->drm_fd = open (pdata->device_name, O_RDWR | O_CLOEXEC);
+  if (pdata->drm_fd == -1 && errno == EINVAL)
+#endif
+  {
+    pdata->drm_fd = open (pdata->device_name, O_RDWR);
+    if (pdata->drm_fd != -1)
+      fcntl (pdata->drm_fd, F_SETFD, fcntl (pdata->drm_fd,
+              F_GETFD) | FD_CLOEXEC);
+  }
+
+  if (pdata->drm_fd < 0)
+    return;
+
+  if (drmGetMagic (pdata->drm_fd, &magic) != 0) {
+    close (pdata->drm_fd);
+    pdata->drm_fd = -1;
+    return;
+  }
+
+  tizen_buffer_pool_authenticate (tizen_buffer_pool, magic);
+
+  if (src)
+    wl_display_roundtrip (src->display);
+}
+
+static void
+buffer_pool_handle_format (void *data,
+    struct tizen_buffer_pool *tizen_buffer_pool, uint32_t format)
+{
+  struct tbm_buffer_pool_data *pdata = (struct tbm_buffer_pool_data *) data;
+  struct tbm_buffer_format *fmt;
+
+  if (pdata == NULL)
+    return;
+
+  if (!pdata->has_capability)
+    return;
+
+  fmt = g_malloc0 (sizeof (struct tbm_buffer_format));
+  if (fmt == NULL)
+    return;
+
+  fmt->format = format;
+  wl_list_insert (&pdata->support_format_list, &fmt->link);
+
+  GST_INFO ("Format : %c%c%c%c", FOURCC_STR (format));
+}
+
+static const struct tizen_buffer_pool_listener buffer_pool_listener = {
+  buffer_pool_handle_device,
+  buffer_pool_handle_authenticated,
+  buffer_pool_handle_capabilities,
+  buffer_pool_handle_format
+};
+
+static struct output_buffer *
+tbm_buffer_create (GstWaylandSrc * src)
+{
+  struct output_buffer *out_buffer = NULL;
+  struct tbm_buffer_pool_data *pdata = NULL;
+  gsize block_size = 0, stride = 0;
+
+  if (src->tbm_buffer_pool == NULL) {
+    GST_ERROR_OBJECT (src, "TBM buffer pool is NULL");
+    return FALSE;
+  }
+
+  if (!check_format (src)) {
+    GST_ERROR_OBJECT (src, "Unsupported format '%c%c%c%c'",
+        FOURCC_STR (src->format));
+    return NULL;
+  }
+
+  pdata = tizen_buffer_pool_get_user_data (src->tbm_buffer_pool);
+  if (pdata == NULL || pdata->bufmgr == NULL) {
+    GST_ERROR_OBJECT (src, "TBM buffer pool DATA is NULL");
+    return FALSE;
+  }
+
+
+  out_buffer = g_malloc0 (sizeof *out_buffer);
+  if (!out_buffer)
+    return NULL;
+
+  switch (src->format) {
+    case TIZEN_BUFFER_POOL_FORMAT_ARGB8888:
+    case TIZEN_BUFFER_POOL_FORMAT_XRGB8888:
+      stride = src->width * 4;
+      block_size = stride * src->height;
+
+      out_buffer->bo[0] =
+          tbm_bo_alloc (pdata->bufmgr, block_size, TBM_BO_DEFAULT);
+      if (out_buffer->bo[0] == NULL)
+        goto failed;
+
+      out_buffer->wl_buffer =
+          tizen_buffer_pool_create_buffer (src->tbm_buffer_pool,
+          tbm_bo_export (out_buffer->bo[0]),
+          src->width, src->height, stride, src->format);
+
+      out_buffer->size = block_size;
+      out_buffer->stride = stride;
+      break;
+    case TIZEN_BUFFER_POOL_FORMAT_NV12:
+    case TIZEN_BUFFER_POOL_FORMAT_NV21:
+      out_buffer->bo[0] =
+          tbm_bo_alloc (pdata->bufmgr, src->width * src->height,
+          TBM_BO_DEFAULT);
+      if (out_buffer->bo[0] == NULL)
+        goto failed;
+
+      out_buffer->bo[1] =
+          tbm_bo_alloc (pdata->bufmgr, src->width * src->height * 0.5,
+          TBM_BO_DEFAULT);
+      if (out_buffer->bo[1] == NULL)
+        goto failed;
+
+      out_buffer->wl_buffer =
+          tizen_buffer_pool_create_planar_buffer (src->tbm_buffer_pool,
+          src->width, src->height, src->format,
+          tbm_bo_export (out_buffer->bo[0]), 0, src->width,
+          tbm_bo_export (out_buffer->bo[1]), 0, src->width, 0, 0, 0);
+      break;
+    default:
+      GST_WARNING_OBJECT (src, "unknown format");
+      break;
+  }
+
+  if (out_buffer->wl_buffer == NULL)
+    goto failed;
+
+  return out_buffer;
+
+failed:
+  destroy_buffer (out_buffer);
+  return NULL;
 }
 
 static gboolean
@@ -349,13 +667,18 @@ gst_wayland_src_capture_thread (GstWaylandSrc * src)
 
   output = gst_wayland_src_active_output (src);
   if (!output)
-    return FALSE;
+    return NULL;
 
   for (i = 0; i < NUM_BUFFERS; i++) {
-    out_buffer = shm_buffer_create (src->shm, output->width, output->height);
+    if (src->use_tbm) {
+      out_buffer = tbm_buffer_create (src);
+    } else {
+      out_buffer = shm_buffer_create (src->shm, output->width, output->height);
+    }
+
     if (!out_buffer) {
-      GST_ERROR ("failed to create shm buffer\n");
-      return FALSE;
+      GST_ERROR ("failed to create buffer\n");
+      return NULL;
     }
 
     out_buffer->output = output;
@@ -385,7 +708,7 @@ gst_wayland_src_capture_thread (GstWaylandSrc * src)
     } else {
       wl_display_read_events (src->display);
       wl_display_dispatch_queue_pending (src->display, src->queue);
-      GST_WARNING ("Poll end22");
+      GST_WARNING ("Poll end");
     }
   }
 
@@ -408,7 +731,6 @@ gst_wayland_src_class_init (GstWaylandSrcClass * klass)
   gc->get_property = gst_wayland_src_get_property;
 
   bc->fixate = gst_wayland_src_fixate;
-  bc->get_caps = gst_wayland_src_get_caps;
   bc->set_caps = gst_wayland_src_set_caps;
   bc->start = gst_wayland_src_start;
   bc->stop = gst_wayland_src_stop;
@@ -423,14 +745,15 @@ gst_wayland_src_class_init (GstWaylandSrcClass * klass)
       g_param_spec_string ("display-name", "Display", "Wayland Display Name",
           NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
-  g_object_class_install_property (gc, PROP_OUTPUT_NUM,
-      g_param_spec_uint ("output-num", "Output number", "Wayland Output Number",
-          0, G_MAXINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gc, PROP_USE_TBM,
+      g_param_spec_boolean ("use-tbm", "Use Tizen Buffer Object",
+          "Use Tizen Buffer Object", FALSE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
 
   gst_element_class_set_static_metadata (ec,
       "tizen wayland source", "Source/Video",
-      "captures a wayland output",
-      "Hyunjun Ko <zzoon.ko@samsung.com>");
+      "captures a wayland output", "Hyunjun Ko <zzoon.ko@samsung.com>");
 }
 
 static void
@@ -444,7 +767,6 @@ gst_wayland_src_init (GstWaylandSrc * src)
   src->registry = NULL;
   src->shm = NULL;
   src->screenshooter = NULL;
-  src->output_num = 0;
   src->fps_n = src->fps_d = 0;
   src->buffer_copy_done = 0;
   wl_list_init (&src->output_list);
@@ -455,6 +777,13 @@ gst_wayland_src_init (GstWaylandSrc * src)
   g_mutex_init (&src->queue_lock);
   g_mutex_init (&src->cond_lock);
   g_cond_init (&src->queue_cond);
+
+  src->tbm_buffer_pool = NULL;
+  src->format = FOURCC_ARGB;
+  src->width = DEFAULT_WIDTH;
+  src->height = DEFAULT_HEIGHT;
+
+  src->use_tbm = TRUE;
 }
 
 static void
@@ -487,10 +816,7 @@ gst_wayland_src_finalize (GObject * object)
   }
 
   wl_list_for_each_safe (out_buffer, out_buffer_tmp, &src->buffer_list, link) {
-    if (out_buffer->wl_buffer)
-      wl_buffer_destroy (out_buffer->wl_buffer);
-    wl_list_remove (&out_buffer->link);
-    g_free (out_buffer);
+    destroy_buffer (out_buffer);
   }
 
   if (src->shm)
@@ -500,6 +826,8 @@ gst_wayland_src_finalize (GObject * object)
     tizen_screenmirror_destroy (src->screenmirror);
   if (src->screenshooter)
     tizen_screenshooter_destroy (src->screenshooter);
+  if (src->tbm_buffer_pool)
+    tizen_buffer_pool_destroy (src->tbm_buffer_pool);
 
   if (src->queue)
     wl_event_queue_destroy (src->queue);
@@ -528,11 +856,37 @@ gst_wayland_src_connect (GstWaylandSrc * src)
   wl_display_dispatch_queue (src->display, src->queue);
   wl_display_roundtrip_queue (src->display, src->queue);
 
-  if (!src->screenshooter) {
+  /* check wayland objects */
+  if (src->shm == NULL) {
+    GST_ERROR_OBJECT (src, "display doesn't support tizen screenshooter\n");
+    return FALSE;
+  }
+  if (src->screenshooter == NULL) {
     GST_ERROR_OBJECT (src, "display doesn't support tizen screenshooter\n");
     return FALSE;
   }
 
+  struct output *output;
+
+  output = gst_wayland_src_active_output (src);
+  if (output == NULL) {
+    GST_ERROR_OBJECT (src, "output is NULL");
+    return FALSE;
+  }
+
+  src->screenmirror =
+      tizen_screenshooter_get_screenmirror (src->screenshooter, output->output);
+  if (src->screenmirror == NULL) {
+    GST_ERROR_OBJECT (src, "tizen screenmirror is NULL");
+    return FALSE;
+  }
+
+  wl_proxy_set_queue ((struct wl_proxy *) src->screenmirror, src->queue);
+  tizen_screenmirror_add_listener (src->screenmirror, &mirror_listener, src);
+  tizen_screenmirror_set_stretch (src->screenmirror,
+      TIZEN_SCREENMIRROR_STRETCH_KEEP_RATIO);
+
+  GST_INFO_OBJECT (src, "gst_wayland_src_connect success");
   return TRUE;
 }
 
@@ -580,9 +934,10 @@ gst_wayland_src_set_property (GObject * object, guint prop_id,
         g_free (src->display_name);
       src->display_name = g_strdup (g_value_get_string (value));
       break;
-    case PROP_OUTPUT_NUM:
-      src->output_num = g_value_get_uint (value);
+    case PROP_USE_TBM:
+      src->use_tbm = g_value_get_boolean (value);
       break;
+
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -599,8 +954,8 @@ gst_wayland_src_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_DISPLAY_NAME:
       g_value_set_string (value, src->display_name);
       break;
-    case PROP_OUTPUT_NUM:
-      g_value_set_uint (value, src->output_num);
+    case PROP_USE_TBM:
+      g_value_set_boolean (value, src->use_tbm);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -626,49 +981,76 @@ gst_wayland_src_fixate (GstBaseSrc * bsrc, GstCaps * caps)
   return caps;
 }
 
-static GstCaps *
-gst_wayland_src_get_caps (GstBaseSrc * psrc, GstCaps * filter)
-{
-  GstWaylandSrc *src = GST_WAYLAND_SRC (psrc);
-  GstCaps *caps = NULL;
-  struct output *output = NULL;
-
-  if (!src->display && !gst_wayland_src_connect (src))
-    return NULL;
-
-  output = gst_wayland_src_active_output (src);
-  if (!output)
-    return NULL;
-
-  caps = gst_caps_new_simple ("video/x-raw",
-      "format", G_TYPE_STRING, GST_WAYLAND_SRC_VIDEO_FORMAT,
-      "width", G_TYPE_INT, output->width,
-      "height", G_TYPE_INT, output->height,
-      "framerate", GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
-
-  return caps;
-}
-
 static gboolean
 gst_wayland_src_set_caps (GstBaseSrc * psrc, GstCaps * caps)
 {
   GstWaylandSrc *src = GST_WAYLAND_SRC (psrc);
   GstStructure *structure;
   const GValue *fps;
+  gint width = 0;
+  gint height = 0;
+  gboolean ret = TRUE;
+  const gchar *media_type = NULL;
 
+  GST_WARNING_OBJECT (src, "set_caps : %" GST_PTR_FORMAT, caps);
   if (!src->display)
     return FALSE;
 
-  /* The only thing that can change is the framerate downstream wants */
   structure = gst_caps_get_structure (caps, 0);
+
+  ret = gst_structure_get_int (structure, "width", &width);
+  if (!ret) {
+    GST_WARNING_OBJECT (src, "waylandsrc width not specified in caps");
+  } else {
+    if (width > 1)
+     src->width = (guint) width;
+  }
+
+  ret = gst_structure_get_int (structure, "height", &height);
+  if (!ret) {
+    GST_WARNING_OBJECT (src, "waylandsrc height not specified in caps");
+  } else {
+    if (height > 1)
+      src->height = (guint) height;
+  }
+
+  media_type = gst_structure_get_name (structure);
+  if (media_type != NULL) {
+
+    if (g_strcmp0 (media_type, "video/x-raw") == 0) {
+      const gchar *sformat = NULL;
+
+      sformat = gst_structure_get_string (structure, "format");
+      if (!sformat) {
+        GST_WARNING_OBJECT (src,
+            "waylandsrc format not specified in caps.. Using default ARGB");
+      } else {
+        src->format = FOURCC (sformat[0], sformat[1], sformat[2], sformat[3]);
+      }
+    } else {
+      GST_ERROR_OBJECT (src, "type is not video/x-raw");
+      return FALSE;
+    }
+  } else {
+    GST_WARNING_OBJECT (src, "waylandsrc media-type not specified in caps");
+  }
+
   fps = gst_structure_get_value (structure, "framerate");
-  if (!fps)
-    return FALSE;
+  if (!fps) {
+    GST_WARNING_OBJECT (src, "waylandsrc fps not specified in caps");
+  } else {
+    src->fps_n = gst_value_get_fraction_numerator (fps);
+    src->fps_d = gst_value_get_fraction_denominator (fps);
 
-  src->fps_n = gst_value_get_fraction_numerator (fps);
-  src->fps_d = gst_value_get_fraction_denominator (fps);
+  }
 
+  if (src->use_tbm && src->format == FOURCC_ARGB)
+    src->format = TIZEN_BUFFER_POOL_FORMAT_ARGB8888;
+
+  GST_INFO_OBJECT (src, "format:%c%c%c%c, width: %d, height: %d",
+      FOURCC_STR (src->format), src->width, src->height);
   GST_INFO_OBJECT (src, "FPS %d/%d", src->fps_n, src->fps_d);
+  gst_wayland_src_thread_start (src);
 
   return TRUE;
 }
@@ -678,14 +1060,17 @@ gst_wayland_src_start (GstBaseSrc * basesrc)
 {
   GstWaylandSrc *src = GST_WAYLAND_SRC (basesrc);
 
+  if (!src->display && !gst_wayland_src_connect (src)) {
+    GST_ERROR_OBJECT (src, "gst_wayland_src_connect failed");
+    return FALSE;
+  }
+
   if (!src->display) {
     GST_ERROR_OBJECT (src, "Not setup");
     return FALSE;
   }
 
   src->last_frame_no = -1;
-
-  gst_wayland_src_thread_start (src);
 
   return TRUE;
 }
@@ -751,7 +1136,7 @@ gst_wayland_src_create (GstPushSrc * psrc, GstBuffer ** ret_buf)
       "Create gst buffer for wl_buffer[%d] (Size:%d (%" GST_TIME_FORMAT
       " PTS: %" G_GINT64_FORMAT ")",
       wl_proxy_get_id ((struct wl_proxy *) out_buffer->wl_buffer),
-      out_buffer->size, GST_TIME_ARGS(GST_BUFFER_PTS (*ret_buf)), 
+      out_buffer->size, GST_TIME_ARGS (GST_BUFFER_PTS (*ret_buf)),
       GST_BUFFER_PTS (*ret_buf));
 
   GST_WARNING ("Create END--");
@@ -764,6 +1149,13 @@ gst_wayland_src_gst_buffer_unref (gpointer data)
   struct output_buffer *out_buffer = data;
   struct output *output = out_buffer->output;
   GstWaylandSrc *src = output->src;
+
+  if (src->use_tbm) {
+    if (out_buffer->bo[0])
+      tbm_bo_unmap (out_buffer->bo[0]);
+    if (out_buffer->bo[1])
+      tbm_bo_unmap (out_buffer->bo[1]);
+  }
 
   tizen_screenmirror_queue (src->screenmirror, out_buffer->wl_buffer);
   GST_DEBUG ("Buffer [%d] queued",
@@ -780,7 +1172,7 @@ handle_global (void *data, struct wl_registry *registry,
   struct output *output;
 
   if (strcmp (interface, "wl_output") == 0) {
-    output = malloc (sizeof *output);
+    output = g_malloc0 (sizeof *output);
     output->output = wl_registry_bind (registry, name, &wl_output_interface, 1);
     output->src = src;
     output->width = 0;
@@ -797,6 +1189,46 @@ handle_global (void *data, struct wl_registry *registry,
     }
 
     GST_INFO ("shm is binded");
+  } else if (strcmp (interface, "tizen_buffer_pool") == 0) {
+    struct tizen_buffer_pool *pool;
+    struct tbm_buffer_pool_data *pdata;
+
+    pool = wl_registry_bind (registry, name, &tizen_buffer_pool_interface, 1);
+    if (pool == NULL) {
+      GST_ERROR_OBJECT (src, "wl_registry_bind failed");
+      return;
+    }
+
+    pdata = calloc (1, sizeof (struct tbm_buffer_pool_data));
+    if (!pdata) {
+      tizen_buffer_pool_destroy (pool);
+      GST_ERROR_OBJECT (src, "Allcation buffer pool failed");
+      return;
+    }
+
+    /* initial value */
+    pdata->name = name;
+    pdata->drm_fd = -1;
+    pdata->src = src;
+    wl_list_init (&pdata->support_format_list);
+
+    tizen_buffer_pool_add_listener (pool, &buffer_pool_listener, pdata);
+
+    /* make sure all tizen_buffer_pool's events are handled */
+    wl_display_roundtrip_queue (src->display, src->queue);
+
+    if (!pdata->has_capability || !pdata->authenticated)
+      destroy_mirror_buffer_pool (pool);
+    else {
+      pdata->bufmgr = tbm_bufmgr_init (pdata->drm_fd);
+      if (!pdata->bufmgr) {
+        destroy_mirror_buffer_pool (pool);
+        return;
+      }
+
+      src->tbm_buffer_pool = pool;
+      GST_INFO ("tizen_buffer_pool is binded");
+    }
   } else if (strcmp (interface, "tizen_screenshooter") == 0) {
     src->screenshooter =
         wl_registry_bind (registry, name, &tizen_screenshooter_interface, 1);
@@ -804,22 +1236,6 @@ handle_global (void *data, struct wl_registry *registry,
       GST_ERROR_OBJECT (src, "tizen screenshooter is NULL");
       return;
     }
-
-    output = gst_wayland_src_active_output (src);
-    if (output == NULL) {
-      GST_ERROR_OBJECT (src, "output is NULL");
-      return;
-    }
-
-    src->screenmirror =
-        tizen_screenshooter_get_screenmirror (src->screenshooter,
-        output->output);
-    if (src->screenmirror == NULL) {
-      GST_ERROR_OBJECT (src, "tizen screenmirror is NULL");
-      return;
-    }
-
-    tizen_screenmirror_add_listener (src->screenmirror, &mirror_listener, src);
     GST_INFO ("Tizen screenshooter is created");
   }
 }

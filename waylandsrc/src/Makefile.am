@@ -14,12 +14,12 @@ plugin_LTLIBRARIES = libgstwaylandsrc.la
 ##############################################################################
 
 # sources used to compile this plug-in
-libgstwaylandsrc_la_SOURCES = gstwaylandsrc.c tizen-screenshooter-protocol.c
+libgstwaylandsrc_la_SOURCES = gstwaylandsrc.c tizen-screenshooter-protocol.c tizen-buffer-pool-protocol.c
 
 # flags used to compile this plugin
 # add other _CFLAGS and _LIBS as needed
-libgstwaylandsrc_la_CFLAGS = $(GST_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(WAYLAND_CLIENT_CFLAGS)
-libgstwaylandsrc_la_LIBADD = $(GST_LIBS) $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(WAYLAND_CLIENT_LIBS)
+libgstwaylandsrc_la_CFLAGS = $(GST_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(WAYLAND_CLIENT_CFLAGS) $(DRM_CFLAGS) $(TBM_CFLAGS) $(MMCOMMON_CFLAGS)
+libgstwaylandsrc_la_LIBADD = $(GST_LIBS) $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(WAYLAND_CLIENT_LIBS) $(DRM_LIBS) $(TBM_LIBS)
 libgstwaylandsrc_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
 
 # headers we need but don't want installed

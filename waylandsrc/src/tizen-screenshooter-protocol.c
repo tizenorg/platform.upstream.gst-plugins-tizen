@@ -27,6 +27,7 @@ WL_EXPORT const struct wl_interface tizen_screenshooter_interface = {
 
 static const struct wl_message tizen_screenmirror_requests[] = {
   {"destroy", "", types + 0},
+  {"set_stretch", "u", types + 0},
   {"queue", "o", types + 3},
   {"dequeue", "o", types + 4},
   {"start", "", types + 0},
@@ -41,6 +42,6 @@ static const struct wl_message tizen_screenmirror_events[] = {
 
 WL_EXPORT const struct wl_interface tizen_screenmirror_interface = {
   "tizen_screenmirror", 1,
-  5, tizen_screenmirror_requests,
+  6, tizen_screenmirror_requests,
   3, tizen_screenmirror_events,
 };
