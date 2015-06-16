@@ -136,7 +136,6 @@ struct _GstWFDRTSPSrc {
 
   /* state */
   GstRTSPState       state;
-  gboolean           tried_url_auth;
 
   /* supported methods */
   gint               methods;
@@ -164,6 +163,11 @@ struct _GstWFDRTSPSrcClass {
   /* signals */
   void     (*update_media_info)       (GstWFDRTSPSrc *src, GstStructure * str);
   void     (*change_av_format)       (GstWFDRTSPSrc *src, gpointer *need_to_flush);
+
+  /* actions */
+  void     (*pause)   (GstWFDRTSPSrc *src);
+  void     (*resume)   (GstWFDRTSPSrc *src);
+  void     (*close)   (GstWFDRTSPSrc *src);
 };
 
 GType gst_wfdrtspsrc_get_type(void);

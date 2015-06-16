@@ -29,7 +29,7 @@
 #define WFD_MESSAGE_SET_AUDIO_SINK_TYPE "wfdconfig_set_audio_sink_type"
 #define WFD_MESSAGE_SET_CONNECTOR_TYPE "wfdconfig_set_connector_type"
 #define WFD_MESSAGE_SET_STANDBY "wfdconfig_set_standby"
-#define WFD_MESSAGE_SET_IDR_REQUESTER "wfdconfig_set_idr_request"
+#define WFD_MESSAGE_SET_IDR_REQUEST "wfdconfig_set_idr_request"
 #define WFD_MESSAGE_SET_UIBC_CAPABILITY "wfdconfig_set_uibc_capability"
 #define WFD_MESSAGE_SET_UIBC_STATUS "wfdconfig_set_uibc_status"
 #define WFD_MESSAGE_FREE "wfdconfig_message_free"
@@ -121,10 +121,10 @@ G_STMT_START { \
   }\
 } G_STMT_END
 
-#define WFDCONFIG_SET_IDR_REQUESTER(msg, label)\
+#define WFDCONFIG_SET_IDR_REQUEST(msg, label)\
 G_STMT_START { \
   if (src->extended_wfd_message_support){\
-    WFDResult (*func)(WFDMessage *) = __wfd_config_message_func(src, WFD_MESSAGE_SET_IDR_REQUESTER);\
+    WFDResult (*func)(WFDMessage *) = __wfd_config_message_func(src, WFD_MESSAGE_SET_IDR_REQUEST);\
     if(func == NULL) {\
       wfd_res = WFD_NOT_IMPLEMENTED;\
       goto label;\

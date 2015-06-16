@@ -112,6 +112,9 @@ enum
 {
   SIGNAL_UPDATE_MEDIA_INFO,
   SIGNAL_AV_FORMAT_CHANGE,
+  SIGNAL_PAUSE,
+  SIGNAL_RESUME,
+  SIGNAL_CLOSE,
   LAST_SIGNAL
 };
 
@@ -126,9 +129,9 @@ enum _GstWfdRtspSrcBufferMode
 #define _SET_FRAMERATE_TO_CAPS 1
 
 /* properties default values */
-#define DEFAULT_LOCATION         NULL
+#define DEFAULT_LOCATION      NULL
 #define DEFAULT_DEBUG            FALSE
-#define DEFAULT_RETRY            20
+#define DEFAULT_RETRY            50
 #define DEFAULT_TCP_TIMEOUT      20000000
 #define DEFAULT_PROXY            NULL
 #define DEFAULT_RTP_BLOCKSIZE    0
@@ -208,13 +211,18 @@ static gboolean gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src);
 static GstRTSPResult gst_wfdrtspsrc_play (GstWFDRTSPSrc * src);
 static GstRTSPResult gst_wfdrtspsrc_pause (GstWFDRTSPSrc * src);
 static GstRTSPResult gst_wfdrtspsrc_close (GstWFDRTSPSrc * src, gboolean only_close);
+static void
+gst_wfdrtspsrc_send_pause_cmd (GstWFDRTSPSrc * src);
+static void
+gst_wfdrtspsrc_send_play_cmd (GstWFDRTSPSrc * src);
+static void
+gst_wfdrtspsrc_send_close_cmd (GstWFDRTSPSrc * src);
+
+
 
 static gboolean gst_wfdrtspsrc_set_proxy (GstWFDRTSPSrc * rtsp, const gchar * proxy);
 static void gst_wfdrtspsrc_set_tcp_timeout (GstWFDRTSPSrc * src, guint64 timeout);
 
-
-static gboolean gst_wfdrtspsrc_setup_auth (GstWFDRTSPSrc * src,
-    GstRTSPMessage * response);
 
 static void gst_wfdrtspsrc_uri_handler_init (gpointer g_iface,
     gpointer iface_data);
@@ -239,6 +247,11 @@ static void gst_wfdrtspsrc_connection_flush (GstWFDRTSPSrc * src, gboolean flush
 
 static GstRTSPResult gst_wfdrtspsrc_get_video_parameter(GstWFDRTSPSrc * src, WFDMessage *msg);
 static GstRTSPResult gst_wfdrtspsrc_get_audio_parameter(GstWFDRTSPSrc * src, WFDMessage *msg);
+
+static gboolean
+gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * event);
+static gboolean
+gst_wfdrtspsrc_handle_src_query(GstPad * pad, GstObject *parent, GstQuery * query);
 
 #ifdef ENABLE_WFD_MESSAGE
 static gint
@@ -275,13 +288,6 @@ __wfd_config_message_close(GstWFDRTSPSrc *src)
 }
 #endif
 
-static gboolean
-gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * event);
-static gboolean
-gst_wfdrtspsrc_handle_src_query(GstPad * pad, GstObject *parent, GstQuery * query);
-
-
-
 static guint gst_wfdrtspsrc_signals[LAST_SIGNAL] = { 0 };
 
 static void
@@ -293,7 +299,7 @@ _do_init (GType wfdrtspsrc_type)
     NULL
   };
 
-  GST_DEBUG_CATEGORY_INIT (wfdrtspsrc_debug, "wfdrtspsrc", 0, "WFD RTSP src");
+  GST_DEBUG_CATEGORY_INIT (wfdrtspsrc_debug, "wfdrtspsrc", 0, "Wi-Fi Display Sink source");
 
   g_type_add_interface_static (wfdrtspsrc_type, GST_TYPE_URI_HANDLER,
       &urihandler_info);
@@ -329,7 +335,7 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
 
   g_object_class_install_property (gobject_class, PROP_RETRY,
       g_param_spec_uint ("retry", "Retry",
-          "Max number of retries when allocating RTP ports.",
+          "Max number of retries when connecting Wi-Fi Display source",
           0, G_MAXUINT16, DEFAULT_RETRY,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
@@ -417,18 +423,43 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
       G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (GstWFDRTSPSrcClass, change_av_format),
       NULL, NULL, g_cclosure_marshal_VOID__POINTER, G_TYPE_NONE, 1, G_TYPE_POINTER);
 
+  gst_wfdrtspsrc_signals[SIGNAL_PAUSE] =
+      g_signal_new ("pause", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_STRUCT_OFFSET (GstWFDRTSPSrcClass, pause), NULL, NULL,
+      g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
+
+  gst_wfdrtspsrc_signals[SIGNAL_RESUME] =
+      g_signal_new ("resume", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_STRUCT_OFFSET (GstWFDRTSPSrcClass, resume), NULL, NULL,
+      g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
+
+  gst_wfdrtspsrc_signals[SIGNAL_CLOSE] =
+      g_signal_new ("close", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_STRUCT_OFFSET (GstWFDRTSPSrcClass, close), NULL, NULL,
+      g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
+
+  gstelement_class->send_event =
+      GST_DEBUG_FUNCPTR(gst_wfdrtspsrc_send_event);
+  gstelement_class->change_state =
+      GST_DEBUG_FUNCPTR(gst_wfdrtspsrc_change_state);
+
+  gstbin_class->handle_message =
+      GST_DEBUG_FUNCPTR(gst_wfdrtspsrc_handle_message);
+
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_wfdrtspsrc_src_template));
 
-  gst_element_class_set_details_simple (gstelement_class, "Wi-Fi Display source element",
+  gst_element_class_set_details_simple (gstelement_class, "Wi-Fi Display Sink source element",
       "Source/Network",
-      "Receive data over the Wi-Fi Direct network via RTSP",
+      "Negotiate the capability and receive the RTP packets from the Wi-Fi Display source",
       "YeJin Cho <cho.yejin@samsung.com>");
 
-  gstelement_class->send_event = gst_wfdrtspsrc_send_event;
-  gstelement_class->change_state = gst_wfdrtspsrc_change_state;
-
-  gstbin_class->handle_message = gst_wfdrtspsrc_handle_message;
+  klass->pause = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_pause_cmd);
+  klass->resume = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_play_cmd);
+  klass->close = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_close_cmd);
 }
 
 static GstStructure *
@@ -1017,7 +1048,7 @@ gst_wfdrtspsrc_send_request (GstWFDRTSPSrc * src)
      /* Note : RTSP M13  :
       *   Send RTSP SET_PARAMETER with wfd-idr-request to request IDR refresh.
       */
-      WFDCONFIG_SET_IDR_REQUESTER(wfd_msg, error);
+      WFDCONFIG_SET_IDR_REQUEST(wfd_msg, error);
       break;
 
     case WFD_UIBC_CAPABILITY:
@@ -1126,6 +1157,7 @@ gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * eve
       forward = TRUE;
       break;
   }
+
   if (forward) {
     GstPad *target;
 
@@ -1350,7 +1382,7 @@ connect_retry:
     if ((res =
             gst_rtsp_connection_connect (info->connection,
                 src->ptcp_timeout)) < 0) {
-      if (retry < 50) {
+      if (retry < src->retry) {
         GST_ERROR_OBJECT(src, "Connection failed... Try again...");
         usleep(100000);
         retry++;
@@ -1757,9 +1789,6 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
       res = gst_rtsp_message_get_body (request, &data, &size);
       if (res < 0)
         goto send_error;
-
-      if(src->extended_wfd_message_support == FALSE)
-        goto message_config_error;
 
       WFDCONFIG_MESSAGE_NEW(&wfd_msg, message_config_error);
       WFDCONFIG_MESSAGE_INIT(wfd_msg, message_config_error);
@@ -2333,272 +2362,6 @@ gst_wfdrtspsrc_auth_method_to_string (GstRTSPAuthMethod method)
   return "Unknown";
 }
 
-static const gchar *
-gst_wfdrtspsrc_skip_lws (const gchar * s)
-{
-  while (g_ascii_isspace (*s))
-    s++;
-  return s;
-}
-
-static const gchar *
-gst_wfdrtspsrc_unskip_lws (const gchar * s, const gchar * start)
-{
-  while (s > start && g_ascii_isspace (*(s - 1)))
-    s--;
-  return s;
-}
-
-static const gchar *
-gst_wfdrtspsrc_skip_commas (const gchar * s)
-{
-  /* The grammar allows for multiple commas */
-  while (g_ascii_isspace (*s) || *s == ',')
-    s++;
-  return s;
-}
-
-static const gchar *
-gst_wfdrtspsrc_skip_item (const gchar * s)
-{
-  gboolean quoted = FALSE;
-  const gchar *start = s;
-
-  /* A list item ends at the last non-whitespace character
-   * before a comma which is not inside a quoted-string. Or at
-   * the end of the string.
-   */
-  while (*s) {
-    if (*s == '"')
-      quoted = !quoted;
-    else if (quoted) {
-      if (*s == '\\' && *(s + 1))
-        s++;
-    } else {
-      if (*s == ',')
-        break;
-    }
-    s++;
-  }
-
-  return gst_wfdrtspsrc_unskip_lws (s, start);
-}
-
-static void
-gst_rtsp_decode_quoted_string (gchar * quoted_string)
-{
-  gchar *src, *dst;
-
-  src = quoted_string + 1;
-  dst = quoted_string;
-  while (*src && *src != '"') {
-    if (*src == '\\' && *(src + 1))
-      src++;
-    *dst++ = *src++;
-  }
-  *dst = '\0';
-}
-
-/* Extract the authentication tokens that the server provided for each method
- * into an array of structures and give those to the connection object.
- */
-static void
-gst_wfdrtspsrc_parse_digest_challenge (GstRTSPConnection * conn,
-    const gchar * header, gboolean * stale)
-{
-  GSList *list = NULL, *iter;
-  const gchar *end;
-  gchar *item, *eq, *name_end, *value;
-
-  g_return_if_fail (stale != NULL);
-
-  gst_rtsp_connection_clear_auth_params (conn);
-  *stale = FALSE;
-
-  /* Parse a header whose content is described by RFC2616 as
-   * "#something", where "something" does not itself contain commas,
-   * except as part of quoted-strings, into a list of allocated strings.
-   */
-  header = gst_wfdrtspsrc_skip_commas (header);
-  while (*header) {
-    end = gst_wfdrtspsrc_skip_item (header);
-    list = g_slist_prepend (list, g_strndup (header, end - header));
-    header = gst_wfdrtspsrc_skip_commas (end);
-  }
-  if (!list)
-    return;
-
-  list = g_slist_reverse (list);
-  for (iter = list; iter; iter = iter->next) {
-    item = iter->data;
-
-    if (item == NULL) continue;
-
-    eq = strchr (item, '=');
-    if (eq) {
-      name_end = (gchar *) gst_wfdrtspsrc_unskip_lws (eq, item);
-      if (name_end == item) {
-        /* That's no good... */
-        g_free (item);
-        item = NULL;
-        continue;
-      }
-
-      *name_end = '\0';
-
-      value = (gchar *) gst_wfdrtspsrc_skip_lws (eq + 1);
-      if (*value == '"')
-        gst_rtsp_decode_quoted_string (value);
-    } else
-        value = NULL;
-
-    if(value && item)
-      if ((strcmp (item, "stale") == 0) && (strcmp (value, "TRUE") == 0))
-        *stale = TRUE;
-    gst_rtsp_connection_set_auth_param (conn, item, value);
-    g_free (item);
-  }
-
-  g_slist_free (list);
-}
-
-/* Parse a WWW-Authenticate Response header and determine the
- * available authentication methods
- *
- * This code should also cope with the fact that each WWW-Authenticate
- * header can contain multiple challenge methods + tokens
- *
- * At the moment, for Basic auth, we just do a minimal check and don't
- * even parse out the realm */
-static void
-gst_wfdrtspsrc_parse_auth_hdr (gchar * hdr, GstRTSPAuthMethod * methods,
-    GstRTSPConnection * conn, gboolean * stale)
-{
-  gchar *start;
-
-  g_return_if_fail (hdr != NULL);
-  g_return_if_fail (methods != NULL);
-  g_return_if_fail (stale != NULL);
-
-  /* Skip whitespace at the start of the string */
-  for (start = hdr; start[0] != '\0' && g_ascii_isspace (start[0]); start++);
-
-  if (g_ascii_strncasecmp (start, "basic", 5) == 0)
-    *methods |= GST_RTSP_AUTH_BASIC;
-  else if (g_ascii_strncasecmp (start, "digest ", 7) == 0) {
-    *methods |= GST_RTSP_AUTH_DIGEST;
-    gst_wfdrtspsrc_parse_digest_challenge (conn, &start[7], stale);
-  }
-}
-
-/**
- * gst_wfdrtspsrc_setup_auth:
- * @src: the rtsp source
- *
- * Configure a username and password and auth method on the
- * connection object based on a response we received from the
- * peer.
- *
- * Currently, this requires that a username and password were supplied
- * in the uri. In the future, they may be requested on demand by sending
- * a message up the bus.
- *
- * Returns: TRUE if authentication information could be set up correctly.
- */
-static gboolean
-gst_wfdrtspsrc_setup_auth (GstWFDRTSPSrc * src, GstRTSPMessage * response)
-{
-  gchar *user = NULL;
-  gchar *pass = NULL;
-  GstRTSPAuthMethod avail_methods = GST_RTSP_AUTH_NONE;
-  GstRTSPAuthMethod method;
-  GstRTSPResult auth_result;
-  GstRTSPUrl *url;
-  GstRTSPConnection *conn;
-  gchar *hdr;
-  gboolean stale = FALSE;
-
-  conn = src->conninfo.connection;
-
-  /* Identify the available auth methods and see if any are supported */
-  if (gst_rtsp_message_get_header (response, GST_RTSP_HDR_WWW_AUTHENTICATE,
-          &hdr, 0) == GST_RTSP_OK) {
-    gst_wfdrtspsrc_parse_auth_hdr (hdr, &avail_methods, conn, &stale);
-  }
-
-  if (avail_methods == GST_RTSP_AUTH_NONE)
-    goto no_auth_available;
-
-  /* For digest auth, if the response indicates that the session
-   * data are stale, we just update them in the connection object and
-   * return TRUE to retry the request */
-  if (stale)
-    src->tried_url_auth = FALSE;
-
-  url = gst_rtsp_connection_get_url (conn);
-
-  /* Do we have username and password available? */
-  if (url != NULL && !src->tried_url_auth && url->user != NULL
-      && url->passwd != NULL) {
-    user = url->user;
-    pass = url->passwd;
-    src->tried_url_auth = TRUE;
-    GST_DEBUG_OBJECT (src,
-        "Attempting authentication using credentials from the URL");
-  } else {
-    user = src->user_id;
-    pass = src->user_pw;
-    GST_DEBUG_OBJECT (src,
-        "Attempting authentication using credentials from the properties");
-  }
-
-  /* FIXME: If the url didn't contain username and password or we tried them
-   * already, request a username and passwd from the application via some kind
-   * of credentials request message */
-
-  /* If we don't have a username and passwd at this point, bail out. */
-  if (user == NULL || pass == NULL)
-    goto no_user_pass;
-
-  /* Try to configure for each available authentication method, strongest to
-   * weakest */
-  for (method = GST_RTSP_AUTH_MAX; method != GST_RTSP_AUTH_NONE; method >>= 1) {
-    /* Check if this method is available on the server */
-    if ((method & avail_methods) == 0)
-      continue;
-
-    /* Pass the credentials to the connection to try on the next request */
-    auth_result = gst_rtsp_connection_set_auth (conn, method, user, pass);
-    /* INVAL indicates an invalid username/passwd were supplied, so we'll just
-     * ignore it and end up retrying later */
-    if (auth_result == GST_RTSP_OK || auth_result == GST_RTSP_EINVAL) {
-      GST_DEBUG_OBJECT (src, "Attempting %s authentication",
-          gst_wfdrtspsrc_auth_method_to_string (method));
-      break;
-    }
-  }
-
-  if (method == GST_RTSP_AUTH_NONE)
-    goto no_auth_available;
-
-  return TRUE;
-
-no_auth_available:
-  {
-    /* Output an error indicating that we couldn't connect because there were
-     * no supported authentication protocols */
-    GST_ELEMENT_ERROR (src, RESOURCE, OPEN_READ, (NULL),
-        ("No supported authentication protocol was found"));
-    return FALSE;
-  }
-no_user_pass:
-  {
-    /* We don't fire an error message, we just return FALSE and let the
-     * normal NOT_AUTHORIZED error be propagated */
-    return FALSE;
-  }
-}
-
 static GstRTSPResult
 gst_wfdrtspsrc_try_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
     GstRTSPMessage * request, GstRTSPMessage * response,
@@ -2711,10 +2474,6 @@ server_eof:
  * If @code is NULL, this function will return #GST_RTSP_ERROR (with an invalid
  * @response message) if the response code was not 200 (OK).
  *
- * If the attempt results in an authentication failure, then this will attempt
- * to retrieve authentication credentials via gst_wfdrtspsrc_setup_auth and retry
- * the request.
- *
  * Returns: #GST_RTSP_OK if the processing was successful.
  */
 
@@ -2725,37 +2484,14 @@ gst_wfdrtspsrc_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
 {
   GstRTSPStatusCode int_code = GST_RTSP_STS_OK;
   GstRTSPResult res = GST_RTSP_ERROR;
-  gint count;
-  gboolean retry;
   GstRTSPMethod method = GST_RTSP_INVALID;
 
-  count = 0;
-  do {
-    retry = FALSE;
+  /* save method so we can disable it when the server complains */
+  method = request->type_data.request.method;
 
-    /* make sure we don't loop forever */
-    if (count++ > 8)
-      break;
-
-    /* save method so we can disable it when the server complains */
-    method = request->type_data.request.method;
-
-    if ((res =
-            gst_wfdrtspsrc_try_send (src, conn, request, response, &int_code)) < 0)
-      goto error;
-
-    switch (int_code) {
-      case GST_RTSP_STS_UNAUTHORIZED:
-        if (gst_wfdrtspsrc_setup_auth (src, response)) {
-          /* Try the request/response again after configuring the auth info
-           * and loop again */
-          retry = TRUE;
-        }
-        break;
-      default:
-        break;
-    }
-  } while (retry == TRUE);
+  if ((res =
+          gst_wfdrtspsrc_try_send (src, conn, request, response, &int_code)) < 0)
+    goto error;
 
   /* If the user requested the code, let them handle errors, otherwise
    * post an error below */
@@ -3177,7 +2913,6 @@ gst_wfdrtspsrc_retrieve_wifi_parameters (GstWFDRTSPSrc * src)
   /* can't continue without a valid url */
   if (G_UNLIKELY (src->conninfo.url == NULL))
     goto no_url;
-  src->tried_url_auth = FALSE;
 
   if ((res = gst_wfdrtspsrc_conninfo_connect (src, &src->conninfo)) < 0)
     goto connect_failed;
@@ -3319,6 +3054,12 @@ open_failed:
     GST_ERROR_OBJECT (src, "failed to open");
     goto done;
   }
+}
+
+static void
+gst_wfdrtspsrc_send_close_cmd (GstWFDRTSPSrc * src)
+{
+  gst_wfdrtspsrc_loop_send_cmd (src, CMD_CLOSE);
 }
 
 /* Note : RTSP M8 :
@@ -3501,6 +3242,13 @@ gst_wfdrtspsrc_parse_rtpinfo (GstWFDRTSPSrc * src, gchar * rtpinfo)
   return TRUE;
 }
 
+static void
+gst_wfdrtspsrc_send_play_cmd (GstWFDRTSPSrc * src)
+{
+  gst_wfdrtspsrc_loop_send_cmd (src, CMD_PLAY);
+}
+
+
 /* Note : RTSP M7 :
  *   Send PLAY request to WFD source. WFD source begins audio and/or video streaming.
  */
@@ -3609,6 +3357,12 @@ send_error:
         ("Could not send message."));
     return FALSE;
   }
+}
+
+static void
+gst_wfdrtspsrc_send_pause_cmd (GstWFDRTSPSrc * src)
+{
+  gst_wfdrtspsrc_loop_send_cmd (src, CMD_PAUSE);
 }
 
 /* Note : RTSP M9  :
@@ -3782,7 +3536,7 @@ gst_wfdrtspsrc_thread (GstWFDRTSPSrc * src)
   gst_wfdrtspsrc_connection_flush (src, FALSE);
 
   /* we allow these to be interrupted */
-  if (cmd == CMD_LOOP || cmd == CMD_PAUSE || cmd == CMD_SEND_REQUEST )
+  if (cmd == CMD_LOOP)
     src->waiting = TRUE;
   GST_OBJECT_UNLOCK (src);
 
