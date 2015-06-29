@@ -2220,10 +2220,6 @@ gst_wfd_rtp_buffer_chain (GstPad * pad, GstObject * parent,
     }
   } else {
     GST_DEBUG_OBJECT (jitterbuffer, "First buffer #%d", seqnum);
-    /* we don't know what the next_in_seqnum should be, wait for the last
-     * possible moment to push this buffer, maybe we get an earlier seqnum
-     * while we wait */
-    set_timer (jitterbuffer, TIMER_TYPE_DEADLINE, seqnum, dts);
     do_next_seqnum = TRUE;
     /* take rtptime and dts to calculate packet spacing */
     priv->ips_rtptime = rtptime;
@@ -2622,10 +2618,7 @@ again:
    * previous packet seqnum assume no gap. */
   if (G_UNLIKELY (next_seqnum == -1)) {
     GST_DEBUG_OBJECT (jitterbuffer, "First buffer #%d", seqnum);
-    /* we don't know what the next_seqnum should be, the chain function should
-     * have scheduled a DEADLINE timer that will increment next_seqnum when it
-     * fires, so wait for that */
-    result = GST_FLOW_WAIT;
+    result = pop_and_push_next (jitterbuffer, seqnum);
   } else {
     /* else calculate GAP */
     gap = gst_rtp_buffer_compare_seqnum (next_seqnum, seqnum);
@@ -3029,8 +3022,8 @@ gst_wfd_rtp_buffer_loop (GstWfdRTPBuffer * jitterbuffer)
       JBUF_WAIT_EVENT (priv, flushing);
       result = GST_FLOW_OK;
     }
-  }
-  while (result == GST_FLOW_OK);
+  } while (result == GST_FLOW_OK);
+
   /* store result for upstream */
   priv->srcresult = result;
   /* if we get here we need to pause */

@@ -99,6 +99,29 @@ typedef enum
   WFD_SINK_STATUS
 } GstWFDParam;
 
+typedef struct {
+  GstWFDParam type;
+
+  union {
+    struct {
+      WFDSinkType type;
+    }route_setting;
+    struct {
+      WFDConnector type;
+    }connector_setting;
+    struct {
+      WFDUibcinput_cat input_category;
+      WFDUibcinp_type input_type;
+      WFDHIDCTypePathPair *input_pair;
+      guint32 inp_type_path_count;
+      guint32 tcp_port;
+    }uibc_capability;
+    struct {
+      gboolean enable;
+    }uibc_setting;
+  };
+}GstWFDRequestParam;
+
 struct _GstWFDRTSPSrc {
   GstBin           parent;
 
@@ -110,7 +133,7 @@ struct _GstWFDRTSPSrc {
   gint             loop_cmd;
   gboolean         waiting;
   gboolean do_stop;
-  GstWFDParam wfd_param;
+  GstWFDRequestParam request_param;
 
   /* properties */
   GstRTSPLowerTrans protocols;
@@ -118,13 +141,7 @@ struct _GstWFDRTSPSrc {
   guint             retry;
   GTimeVal          tcp_timeout;
   GTimeVal         *ptcp_timeout;
-  gchar            *proxy_host;
-  guint             proxy_port;
-  gchar            *proxy_user;
-  gchar            *proxy_passwd;
   guint             rtp_blocksize;
-  gchar            *user_id;
-  gchar            *user_pw;
   GstStructure *audio_param;
   GstStructure *video_param;
   GstStructure *hdcp_param;
@@ -168,6 +185,8 @@ struct _GstWFDRTSPSrcClass {
   void     (*pause)   (GstWFDRTSPSrc *src);
   void     (*resume)   (GstWFDRTSPSrc *src);
   void     (*close)   (GstWFDRTSPSrc *src);
+  void     (*set_uibc)   (GstWFDRTSPSrc *src, gboolean enable);
+  void     (*set_stanby)   (GstWFDRTSPSrc *src);
 };
 
 GType gst_wfdrtspsrc_get_type(void);

@@ -276,6 +276,10 @@ wfd_ts_parse_create_tspad (WFDTSParse * parse, const gchar * pad_name)
   WFDTSParsePad *tspad;
 
   pad = gst_pad_new_from_static_template (&program_template, pad_name);
+  if(pad == NULL) {
+    GST_ERROR("gst_pad_new_from_static_template fail");
+    return NULL;
+  }
   gst_pad_set_query_function (pad,
       GST_DEBUG_FUNCPTR (wfd_ts_parse_src_pad_query));
 
@@ -347,6 +351,10 @@ wfd_ts_parse_request_new_pad (GstElement * element, GstPadTemplate * template,
   parse = GST_WFD_TS_PARSE (element);
 
   tspad = wfd_ts_parse_create_tspad (parse, padname);
+  if(tspad == NULL) {
+    GST_ERROR("wfd_ts_parse_create_tspad fail");
+    return NULL;
+  }
   tspad->program_number = program_num;
 
   /* Find if the program is already active */

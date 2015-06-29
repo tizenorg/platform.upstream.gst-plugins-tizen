@@ -597,6 +597,8 @@ _gst_wfd_ts_pmt_stream_copy (GstWFDTSPMTStream * pmt)
 {
   GstWFDTSPMTStream *copy;
 
+  g_return_val_if_fail (pmt, NULL);
+
   copy = g_slice_dup (GstWFDTSPMTStream, pmt);
   copy->descriptors = g_ptr_array_ref (pmt->descriptors);
 
@@ -606,6 +608,8 @@ _gst_wfd_ts_pmt_stream_copy (GstWFDTSPMTStream * pmt)
 static void
 _gst_wfd_ts_pmt_stream_free (GstWFDTSPMTStream * pmt)
 {
+  g_return_if_fail (pmt);
+
   if (pmt->descriptors)
     g_ptr_array_unref (pmt->descriptors);
   g_slice_free (GstWFDTSPMTStream, pmt);
@@ -620,6 +624,8 @@ _gst_wfd_ts_pmt_copy (GstWFDTSPMT * pmt)
 {
   GstWFDTSPMT *copy;
 
+  g_return_val_if_fail (pmt, NULL);
+
   copy = g_slice_dup (GstWFDTSPMT, pmt);
   if (pmt->descriptors)
     copy->descriptors = g_ptr_array_ref (pmt->descriptors);
@@ -631,6 +637,8 @@ _gst_wfd_ts_pmt_copy (GstWFDTSPMT * pmt)
 static void
 _gst_wfd_ts_pmt_free (GstWFDTSPMT * pmt)
 {
+  g_return_if_fail (pmt);
+
   if (pmt->descriptors)
     g_ptr_array_unref (pmt->descriptors);
   g_ptr_array_unref (pmt->streams);

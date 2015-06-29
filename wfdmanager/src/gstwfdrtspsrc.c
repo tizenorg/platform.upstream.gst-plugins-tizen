@@ -115,6 +115,8 @@ enum
   SIGNAL_PAUSE,
   SIGNAL_RESUME,
   SIGNAL_CLOSE,
+  SIGNAL_SET_UIBC,
+  SIGNAL_SET_STANBY,
   LAST_SIGNAL
 };
 
@@ -151,10 +153,7 @@ enum
   PROP_DEBUG,
   PROP_RETRY,
   PROP_TCP_TIMEOUT,
-  PROP_PROXY,
   PROP_RTP_BLOCKSIZE,
-  PROP_USER_ID,
-  PROP_USER_PW,
   PROP_USER_AGENT,
   PROP_AUDIO_PARAM,
   PROP_VIDEO_PARAM,
@@ -176,7 +175,7 @@ enum
 #define CMD_CLOSE	3
 #define CMD_WAIT	4
 #define CMD_LOOP	5
-#define CMD_SEND_REQUEST	6
+#define CMD_REQUEST	6
 
 #define GST_ELEMENT_PROGRESS(el, type, code, text)      \
 G_STMT_START {                                          \
@@ -192,7 +191,6 @@ static void gst_wfdrtspsrc_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
 static void gst_wfdrtspsrc_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
-static void gst_wfdrtspsrc_dispose (GObject * object);
 static void gst_wfdrtspsrc_finalize (GObject * object);
 
 /* element */
@@ -211,16 +209,7 @@ static gboolean gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src);
 static GstRTSPResult gst_wfdrtspsrc_play (GstWFDRTSPSrc * src);
 static GstRTSPResult gst_wfdrtspsrc_pause (GstWFDRTSPSrc * src);
 static GstRTSPResult gst_wfdrtspsrc_close (GstWFDRTSPSrc * src, gboolean only_close);
-static void
-gst_wfdrtspsrc_send_pause_cmd (GstWFDRTSPSrc * src);
-static void
-gst_wfdrtspsrc_send_play_cmd (GstWFDRTSPSrc * src);
-static void
-gst_wfdrtspsrc_send_close_cmd (GstWFDRTSPSrc * src);
 
-
-
-static gboolean gst_wfdrtspsrc_set_proxy (GstWFDRTSPSrc * rtsp, const gchar * proxy);
 static void gst_wfdrtspsrc_set_tcp_timeout (GstWFDRTSPSrc * src, guint64 timeout);
 
 
@@ -253,19 +242,27 @@ gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * eve
 static gboolean
 gst_wfdrtspsrc_handle_src_query(GstPad * pad, GstObject *parent, GstQuery * query);
 
+static void
+gst_wfdrtspsrc_send_pause_cmd (GstWFDRTSPSrc * src);
+static void
+gst_wfdrtspsrc_send_play_cmd (GstWFDRTSPSrc * src);
+static void
+gst_wfdrtspsrc_send_close_cmd (GstWFDRTSPSrc * src);
+static void
+gst_wfdrtspsrc_set_uibc (GstWFDRTSPSrc * src, gboolean enable);
+static void
+gst_wfdrtspsrc_set_stanby (GstWFDRTSPSrc * src);
+
 #ifdef ENABLE_WFD_MESSAGE
 static gint
 __wfd_config_message_init(GstWFDRTSPSrc * src)
 {
   src->message_handle = dlopen(WFD_MESSAGE_FEATURES_PATH, RTLD_LAZY);
-  if (src->message_handle == NULL)
-  {
+  if (src->message_handle == NULL) {
     GST_ERROR("failed to init __wfd_config_message_init");
     src->extended_wfd_message_support = FALSE;
     return FALSE;
-  }
-  else
-  {
+  } else {
     src->extended_wfd_message_support = TRUE;
   }
   return TRUE;
@@ -320,7 +317,6 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
 
   gobject_class->set_property = gst_wfdrtspsrc_set_property;
   gobject_class->get_property = gst_wfdrtspsrc_get_property;
-  gobject_class->dispose = gst_wfdrtspsrc_dispose;
   gobject_class->finalize = gst_wfdrtspsrc_finalize;
 
   g_object_class_install_property (gobject_class, PROP_LOCATION,
@@ -345,25 +341,10 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
           0, G_MAXUINT64, DEFAULT_TCP_TIMEOUT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
-  g_object_class_install_property (gobject_class, PROP_PROXY,
-      g_param_spec_string ("proxy", "Proxy",
-          "Proxy settings for HTTP tunneling. Format: [http://][user:passwd@]host[:port]",
-          DEFAULT_PROXY, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
   g_object_class_install_property (gobject_class, PROP_RTP_BLOCKSIZE,
       g_param_spec_uint ("rtp-blocksize", "RTP Blocksize",
           "RTP package size to suggest to server (0 = disabled)",
           0, 65536, DEFAULT_RTP_BLOCKSIZE,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  g_object_class_install_property (gobject_class, PROP_USER_ID,
-      g_param_spec_string ("user-id", "user-id",
-          "RTSP location URI user id for authentication", DEFAULT_USER_ID,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  g_object_class_install_property (gobject_class, PROP_USER_PW,
-      g_param_spec_string ("user-pw", "user-pw",
-          "RTSP location URI user password for authentication", DEFAULT_USER_PW,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
    g_object_class_install_property (gobject_class, PROP_USER_AGENT,
@@ -441,6 +422,18 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
       G_STRUCT_OFFSET (GstWFDRTSPSrcClass, close), NULL, NULL,
       g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
 
+  gst_wfdrtspsrc_signals[SIGNAL_SET_UIBC] =
+      g_signal_new ("set-uibc", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_STRUCT_OFFSET (GstWFDRTSPSrcClass, set_uibc), NULL, NULL,
+      g_cclosure_marshal_VOID__BOOLEAN, G_TYPE_NONE, 1, G_TYPE_BOOLEAN);
+
+  gst_wfdrtspsrc_signals[SIGNAL_SET_STANBY] =
+      g_signal_new ("set-stanby", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_STRUCT_OFFSET (GstWFDRTSPSrcClass, set_stanby), NULL, NULL,
+      g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
+
   gstelement_class->send_event =
       GST_DEBUG_FUNCPTR(gst_wfdrtspsrc_send_event);
   gstelement_class->change_state =
@@ -460,6 +453,8 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
   klass->pause = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_pause_cmd);
   klass->resume = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_play_cmd);
   klass->close = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_close_cmd);
+  klass->set_uibc = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_set_uibc);
+  klass->set_stanby = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_set_stanby);
 }
 
 static GstStructure *
@@ -503,7 +498,6 @@ static void
 gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
 {
   GstPadTemplate *template = NULL;
-  GstPad * outpad = NULL;
   gint result = FALSE;
 
 #ifdef G_OS_WIN32
@@ -519,18 +513,13 @@ gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
   src->debug = DEFAULT_DEBUG;
   src->retry = DEFAULT_RETRY;
   gst_wfdrtspsrc_set_tcp_timeout (src, DEFAULT_TCP_TIMEOUT);
-  gst_wfdrtspsrc_set_proxy (src, DEFAULT_PROXY);
   src->rtp_blocksize = DEFAULT_RTP_BLOCKSIZE;
-  src->user_id = g_strdup (DEFAULT_USER_ID);
-  src->user_pw = g_strdup (DEFAULT_USER_PW);
   src->user_agent = g_strdup (DEFAULT_USER_AGENT);
   src->do_stop = FALSE;
-  src->audio_param = NULL;
-  src->video_param = NULL;
   src->hdcp_param = NULL;
-  src->wfd_param = WFD_PARAM_NONE;
   src->audio_param = gst_wfd_rtsp_set_default_audio_param ();
   src->video_param = gst_wfd_rtsp_set_default_video_param ();
+  src->request_param.type = WFD_PARAM_NONE;
 #ifdef ENABLE_WFD_MESSAGE
   result = __wfd_config_message_init(src);
   if(result == FALSE)
@@ -547,58 +536,10 @@ gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
     return;
   }
 
-  /* construct wfdrtspsrc */
-  src->manager->session = gst_element_factory_make ("rtpsession", "wfdrtspsrc_session");
-  if (G_UNLIKELY (src->manager->session == NULL)) {
-    GST_ERROR_OBJECT (src, "could not create gstrtpsession element");
-    return;
-  }
-
-  GST_BIN_CLASS (parent_class)->add_element (GST_BIN_CAST (src),
-      src->manager->session);
-
-#if 0
-  src->manager->requester = gst_element_factory_make ("wfdrtprequester", "wfdrtspsrc_requester");
-  if (G_UNLIKELY (src->manager->requester == NULL)) {
-    GST_ERROR_OBJECT (src, "could not create wfdrtprequester element");
-    return;
-  }
-
-  GST_BIN_CLASS (parent_class)->add_element (GST_BIN_CAST (src),
-      src->manager->requester);
-#endif
-
-  src->manager->wfdrtpbuffer = gst_element_factory_make ("wfdrtpbuffer", "wfdrtspsrc_wfdrtpbuffer");
-  if (G_UNLIKELY (src->manager->wfdrtpbuffer == NULL)) {
-    GST_ERROR_OBJECT (src, "could not create wfdrtpbuffer element");
-    return;
-  }
-
-  GST_BIN_CLASS (parent_class)->add_element (GST_BIN_CAST (src),
-      src->manager->wfdrtpbuffer);
-
-  src->manager->channelpad[0] = gst_element_get_request_pad (src->manager->session, "recv_rtp_sink");
-  if (G_UNLIKELY (src->manager->channelpad[0]  == NULL)) {
-    GST_ERROR_OBJECT (src, "could not create rtp channel pad");
-    return;
-  }
-
-  src->manager->channelpad[1] = gst_element_get_request_pad (src->manager->session, "recv_rtcp_sink");
-  if (G_UNLIKELY (src->manager->channelpad[1]  == NULL)) {
-    GST_ERROR_OBJECT (src, "could not create rtcp channel pad");
-    return;
-  }
-
-  //if (!gst_element_link_many(src->manager->session, src->manager->requester, src->manager->wfdrtpbuffer, NULL)) {
-  if (!gst_element_link_many(src->manager->session, src->manager->wfdrtpbuffer, NULL)) {
-    GST_ERROR_OBJECT (src, "failed to link elements for wfdrtspsrc");
-    return;
-  }
-
   /* create ghost pad for using src pad */
-  outpad = gst_element_get_static_pad (src->manager->wfdrtpbuffer, "src");
   template = gst_static_pad_template_get (&gst_wfdrtspsrc_src_template);
-  src->manager->srcpad = gst_ghost_pad_new_from_template ("src", outpad, template);
+  src->manager->srcpad = gst_ghost_pad_new_no_target_from_template ("src", template);
+  gst_element_add_pad (GST_ELEMENT_CAST (src), src->manager->srcpad);
   gst_object_unref (template);
 
   gst_pad_set_event_function (src->manager->srcpad,
@@ -606,49 +547,11 @@ gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
   gst_pad_set_query_function (src->manager->srcpad,
       GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_handle_src_query));
 
-  gst_element_add_pad (GST_ELEMENT_CAST (src), src->manager->srcpad);
 
   src->state = GST_RTSP_STATE_INVALID;
 
   GST_OBJECT_FLAG_SET (src, GST_ELEMENT_FLAG_SOURCE);
 }
-
-static void
-gst_wfdrtspsrc_dispose (GObject * object)
-{
-  GstWFDRTSPSrc *src = GST_WFDRTSPSRC (object);
-  WFDRTSPManager *manager = src->manager;
-
-  GST_INFO ("dispose");
-
-  if (manager->session != NULL) {
-    GST_BIN_CLASS (parent_class)->remove_element (GST_BIN_CAST (src),
-        manager->session);
-    manager->session = NULL;
-  }
-
-#if 0
-    if (manager->requester != NULL) {
-     GST_BIN_CLASS (parent_class)->remove_element (GST_BIN_CAST (src),
-        manager->requester);
-    manager->requester = NULL;
-  }
-#endif
-  if (manager->wfdrtpbuffer != NULL) {
-     GST_BIN_CLASS (parent_class)->remove_element (GST_BIN_CAST (src),
-        manager->wfdrtpbuffer);
-    manager->wfdrtpbuffer = NULL;
-  }
-
-  if (manager->srcpad) {
-    gst_pad_set_active (manager->srcpad, FALSE);
-    gst_element_remove_pad (GST_ELEMENT_CAST (src), manager->srcpad);
-    manager->srcpad = NULL;
-  }
-
-  G_OBJECT_CLASS (parent_class)->dispose (object);
-}
-
 
 static void
 gst_wfdrtspsrc_finalize (GObject * object)
@@ -657,7 +560,6 @@ gst_wfdrtspsrc_finalize (GObject * object)
 
   src = GST_WFDRTSPSRC (object);
 
-  GST_INFO ("finalize");
   gst_rtsp_url_free (src->conninfo.url);
   if (src->conninfo.location)
     g_free (src->conninfo.location);
@@ -665,12 +567,6 @@ gst_wfdrtspsrc_finalize (GObject * object)
   if (src->conninfo.url_str)
     g_free (src->conninfo.url_str);
   src->conninfo.url_str = NULL;
-  if (src->user_id)
-    g_free (src->user_id);
-  src->user_id = NULL;
-  if (src->user_pw)
-    g_free (src->user_pw);
-  src->user_pw = NULL;
   if (src->user_agent)
     g_free (src->user_agent);
   src->user_agent = NULL;
@@ -694,69 +590,16 @@ gst_wfdrtspsrc_finalize (GObject * object)
 __wfd_config_message_close(src);
 #endif
 
-  if(src->manager)
-  {
+  if(src->manager) {
     g_object_unref (G_OBJECT(src->manager));
-	src->manager = NULL;
+    src->manager = NULL;
   }
+
 #ifdef G_OS_WIN32
   WSACleanup ();
 #endif
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
-  GST_INFO ("finalize");
-}
-
-
-/* a proxy string of the format [user:passwd@]host[:port] */
-static gboolean
-gst_wfdrtspsrc_set_proxy (GstWFDRTSPSrc * rtsp, const gchar * proxy)
-{
-  gchar *at = NULL, *col=NULL;
-  const char * p = NULL;
-
-  g_free (rtsp->proxy_user);
-  rtsp->proxy_user = NULL;
-  g_free (rtsp->proxy_passwd);
-  rtsp->proxy_passwd = NULL;
-  g_free (rtsp->proxy_host);
-  rtsp->proxy_host = NULL;
-  rtsp->proxy_port = 0;
-
-  p = proxy;
-  if (p == NULL)
-    return TRUE;
-
-  /* we allow http:// in front but ignore it */
-  if (g_str_has_prefix (p, "http://"))
-    p += 7;
-
-  at = strchr (p, '@');
-  if (at) {
-    /* look for user:passwd */
-    col = strchr (proxy, ':');
-    if (col == NULL || col > at)
-      return FALSE;
-
-    rtsp->proxy_user = g_strndup (p, col - p);
-    col++;
-    rtsp->proxy_passwd = g_strndup (col, at - col);
-
-    /* move to host */
-    p = at + 1;
-  }
-  col = strchr (p, ':');
-
-  if (col) {
-    /* everything before the colon is the hostname */
-    rtsp->proxy_host = g_strndup (p, col - p);
-    p = col + 1;
-    rtsp->proxy_port = strtoul (p, (char **) &p, 10);
-  } else {
-    rtsp->proxy_host = g_strdup (p);
-    rtsp->proxy_port = 8080;
-  }
-  return TRUE;
 }
 
 static void
@@ -792,21 +635,8 @@ gst_wfdrtspsrc_set_property (GObject * object, guint prop_id, const GValue * val
     case PROP_TCP_TIMEOUT:
       gst_wfdrtspsrc_set_tcp_timeout (src, g_value_get_uint64 (value));
       break;
-    case PROP_PROXY:
-      gst_wfdrtspsrc_set_proxy (src, g_value_get_string (value));
-      break;
     case PROP_RTP_BLOCKSIZE:
       src->rtp_blocksize = g_value_get_uint (value);
-      break;
-    case PROP_USER_ID:
-      if (src->user_id)
-        g_free (src->user_id);
-      src->user_id = g_value_dup_string (value);
-      break;
-    case PROP_USER_PW:
-      if (src->user_pw)
-        g_free (src->user_pw);
-      src->user_pw = g_value_dup_string (value);
       break;
     case PROP_USER_AGENT:
       if (src->user_agent)
@@ -816,9 +646,8 @@ gst_wfdrtspsrc_set_property (GObject * object, guint prop_id, const GValue * val
     case PROP_AUDIO_PARAM:
     {
       const GstStructure *s = gst_value_get_structure (value);
-      if (src->audio_param) {
+      if (src->audio_param)
         gst_structure_free (src->audio_param);
-      }
       if (s)
         src->audio_param = gst_structure_copy (s);
       else
@@ -828,9 +657,8 @@ gst_wfdrtspsrc_set_property (GObject * object, guint prop_id, const GValue * val
     case PROP_VIDEO_PARAM:
     {
       const GstStructure *s = gst_value_get_structure (value);
-      if (src->video_param) {
+      if (src->video_param)
         gst_structure_free (src->video_param);
-      }
       if (s)
         src->video_param = gst_structure_copy (s);
       else
@@ -840,10 +668,8 @@ gst_wfdrtspsrc_set_property (GObject * object, guint prop_id, const GValue * val
     case PROP_HDCP_PARAM:
     {
       const GstStructure *s = gst_value_get_structure (value);
-      if (src->hdcp_param) {
+      if (src->hdcp_param)
         gst_structure_free (src->hdcp_param);
-	   src->hdcp_param = NULL;
-      }
       if (s)
         src->hdcp_param = gst_structure_copy (s);
       else
@@ -863,10 +689,8 @@ gst_wfdrtspsrc_set_property (GObject * object, guint prop_id, const GValue * val
       g_object_set_property (G_OBJECT (src->manager), "timeout", value);
       break;
     case PROP_ENABLE_PAD_PROBE:
-    {
       g_object_set_property (G_OBJECT (src->manager), "enable-pad-probe", value);
       break;
-    }
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -898,27 +722,8 @@ gst_wfdrtspsrc_get_property (GObject * object, guint prop_id, GValue * value,
       g_value_set_uint64 (value, timeout);
       break;
     }
-    case PROP_PROXY:
-    {
-      gchar *str;
-
-      if (src->proxy_host) {
-        str =
-            g_strdup_printf ("%s:%d", src->proxy_host, src->proxy_port);
-      } else {
-        str = NULL;
-      }
-      g_value_take_string (value, str);
-      break;
-    }
     case PROP_RTP_BLOCKSIZE:
       g_value_set_uint (value, src->rtp_blocksize);
-      break;
-    case PROP_USER_ID:
-      g_value_set_string (value, src->user_id);
-      break;
-    case PROP_USER_PW:
-      g_value_set_string (value, src->user_pw);
       break;
     case PROP_USER_AGENT:
       g_value_set_string (value, src->user_agent);
@@ -964,7 +769,10 @@ static GstRTSPResult
 gst_wfdrtspsrc_connection_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
     GstRTSPMessage * message, GTimeVal * timeout)
 {
-  GstRTSPResult ret;
+  GstRTSPResult ret = GST_RTSP_OK;
+
+  if (src->debug)
+    wfd_rtsp_manager_message_dump (message);
 
   if (conn)
     ret = gst_rtsp_connection_send (conn, message, timeout);
@@ -985,29 +793,36 @@ gst_wfdrtspsrc_connection_receive (GstWFDRTSPSrc * src, GstRTSPConnection * conn
   else
     ret = GST_RTSP_ERROR;
 
+  if (src->debug)
+    wfd_rtsp_manager_message_dump (message);
+
   return ret;
 }
 
 static GstRTSPResult
 gst_wfdrtspsrc_send_request (GstWFDRTSPSrc * src)
 {
+  GstWFDRequestParam request_param = {0};
   GstRTSPMessage request = { 0 };
   GstRTSPMessage response = { 0 };
   GstRTSPResult res = GST_RTSP_OK;
   WFDResult wfd_res = WFD_OK;
   WFDMessage *wfd_msg= NULL;
-  GstWFDParam param = WFD_PARAM_NONE;
   gchar *rtsp_body = NULL;
   guint rtsp_body_length = 0;
   GString *rtsp_body_length_str = NULL;
 
-  if (src->wfd_param == WFD_PARAM_NONE) {
-    GST_ERROR_OBJECT (src, "no wfd messag to be sent...");
+  GST_OBJECT_LOCK(src);
+  if (src->request_param.type==WFD_PARAM_NONE) {
+    GST_DEBUG_OBJECT(src, "nothing to request...");
+    GST_OBJECT_UNLOCK(src);
     return GST_RTSP_EINVAL;
   }
+  request_param = src->request_param;
+  memset (&src->request_param, 0, sizeof(GstWFDRequestParam));
+  GST_OBJECT_UNLOCK(src);
 
-  param = src->wfd_param;
-  src->wfd_param = WFD_PARAM_NONE;
+  GST_DEBUG_OBJECT (src, "need to send request message with %d parameter", request_param.type);
 
   res = gst_rtsp_message_init_request (&request, GST_RTSP_SET_PARAMETER,
     src->conninfo.url_str);
@@ -1020,13 +835,13 @@ gst_wfdrtspsrc_send_request (GstWFDRTSPSrc * src)
   WFDCONFIG_MESSAGE_NEW (&wfd_msg, error);
   WFDCONFIG_MESSAGE_INIT(wfd_msg, error);
 
-  switch(param) {
+  switch(request_param.type) {
     case WFD_ROUTE:
      /* Note : RTSP M10  :
       *   Send RTSP SET_PARAMETER with wfd-route to change the WFD sink at which audio is rendered.
       *   Applies only when both a primary and secondary sinks are in WFD session with a WFD source.
       */
-      WFDCONFIG_SET_AUDIO_SINK_TYPE(wfd_msg, WFD_SECONDARY_SINK, error);
+      WFDCONFIG_SET_AUDIO_SINK_TYPE(wfd_msg, request_param.route_setting.type, error);
       break;
 
     case WFD_CONNECTOR_TYPE:
@@ -1034,7 +849,7 @@ gst_wfdrtspsrc_send_request (GstWFDRTSPSrc * src)
       *   Send RTSP SET_PARAMETER with wfd-connector-type to indicate change of active connector type,
       *     when the WFD source and WFD sink support content protection.
       */
-      WFDCONFIG_SET_CONNECTOR_TYPE(wfd_msg, WFD_CONNECTOR_VGA, error);
+      WFDCONFIG_SET_CONNECTOR_TYPE(wfd_msg, request_param.connector_setting.type, error);
       break;
 
     case WFD_STANDBY:
@@ -1055,14 +870,19 @@ gst_wfdrtspsrc_send_request (GstWFDRTSPSrc * src)
      /* Note : RTSP M14  :
       *   Send RTSP SET_PARAMETER with wfd-uibc-capability to select UIBC to be used.
       */
-      WFDCONFIG_SET_UIBC_CAPABILITY(wfd_msg, WFD_UIBC_INPUT_CAT_UNKNOWN, 0, NULL, 0, 0, error);
+      WFDCONFIG_SET_UIBC_CAPABILITY(wfd_msg, request_param.uibc_capability.input_category,
+        request_param.uibc_capability.input_type,
+        request_param.uibc_capability.input_pair,
+        request_param.uibc_capability.inp_type_path_count,
+        request_param.uibc_capability.tcp_port,
+        error);
       break;
 
     case WFD_UIBC_SETTING:
      /* Note : RTSP M15 :
       *   Send RTSP SET_PARAMETER with wfd-uibc-setting to enable or disable the UIBC.
       */
-      WFDCONFIG_SET_UIBC_STATUS(wfd_msg, TRUE, error);
+      WFDCONFIG_SET_UIBC_STATUS(wfd_msg, request_param.uibc_setting.enable, error);
       break;
 
     default:
@@ -1101,9 +921,6 @@ gst_wfdrtspsrc_send_request (GstWFDRTSPSrc * src)
       NULL)) < 0)
     goto error;
 
-  if (src->debug)
-    wfd_rtsp_manager_message_dump (&response);
-
   return res;
 
 /* ERRORS */
@@ -1131,7 +948,7 @@ gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * eve
   /*static gdouble elapsed = 0.0;
   static int count = 0;*/
 
-  src = GST_WFDRTSPSRC_CAST (gst_pad_get_parent (pad));
+  src = GST_WFDRTSPSRC_CAST (parent);
   if(src == NULL)  {
     GST_ERROR_OBJECT (src, "src is NULL.");
     return FALSE;
@@ -1149,8 +966,10 @@ gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * eve
       s = gst_event_get_structure (event);
       if (gst_structure_has_name (s, "GstWFDIDRRequest")) {
         /* Send IDR request */
-	 src->wfd_param = WFD_IDR_REQUEST;
-	 gst_wfdrtspsrc_loop_send_cmd(src, CMD_SEND_REQUEST);
+        GST_OBJECT_LOCK(src);
+        src->request_param.type = WFD_IDR_REQUEST;
+        GST_OBJECT_UNLOCK(src);
+	 gst_wfdrtspsrc_loop_send_cmd(src, CMD_REQUEST);
       }
       break;
     default:
@@ -1170,7 +989,6 @@ gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * eve
   } else {
     gst_event_unref (event);
   }
-  gst_object_unref (src);
 
   return res;
 }
@@ -1182,7 +1000,7 @@ gst_wfdrtspsrc_handle_src_query (GstPad * pad, GstObject *parent, GstQuery * que
   GstWFDRTSPSrc *src = NULL;
   gboolean res = FALSE;
 
-  src = GST_WFDRTSPSRC_CAST (gst_pad_get_parent (pad));
+  src = GST_WFDRTSPSRC_CAST (parent);
   if(src == NULL)
   {
     GST_ERROR_OBJECT (src, "src is NULL.");
@@ -1215,7 +1033,6 @@ gst_wfdrtspsrc_handle_src_query (GstPad * pad, GstObject *parent, GstQuery * que
       break;
     }
   }
-  gst_object_unref (src);
 
   return res;
 }
@@ -1357,16 +1174,6 @@ gst_wfdrtspsrc_conninfo_connect (GstWFDRTSPSrc * src, GstWFDRTSPConnInfo * info)
     info->url_str = gst_rtsp_url_get_request_uri (info->url);
 
     GST_DEBUG_OBJECT (src, "sanitized uri %s", info->url_str);
-
-    if (info->url->transports & GST_RTSP_LOWER_TRANS_HTTP)
-      gst_rtsp_connection_set_tunneled (info->connection, TRUE);
-
-    if (src->proxy_host) {
-      GST_DEBUG_OBJECT (src, "setting proxy %s:%d", src->proxy_host,
-          src->proxy_port);
-      gst_rtsp_connection_set_proxy (info->connection, src->proxy_host,
-          src->proxy_port);
-    }
   }
 
   if (!info->connected) {
@@ -1484,9 +1291,6 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
   }
 
   GST_DEBUG_OBJECT (src, "got %s request", gst_rtsp_method_as_text(method));
-
-  if (src->debug)
-    wfd_rtsp_manager_message_dump (request);
 
   switch(method) {
     case GST_RTSP_OPTIONS:
@@ -1795,6 +1599,9 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
       WFDCONFIG_MESSAGE_PARSE_BUFFER(data, size, wfd_msg, message_config_error);
       WFDCONFIG_MESSAGE_DUMP(wfd_msg);
 
+      if (!wfd_msg)
+        goto message_config_error;
+
       /* Note : RTSP M4 :
        */
       /* Note : wfd-trigger-method :
@@ -1997,9 +1804,6 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
     goto send_error;
 
 done:
-  if (src->debug)
-    wfd_rtsp_manager_message_dump (&response);
-
   gst_rtsp_message_unset (request);
   gst_rtsp_message_unset (&response);
   WFDCONFIG_MESSAGE_FREE(wfd_msg);
@@ -2339,29 +2143,6 @@ pause:
   }
 }
 
-static const gchar *
-gst_wfdrtspsrc_auth_method_to_string (GstRTSPAuthMethod method)
-{
-  gint index = 0;
-
-  while (method != 0) {
-    index++;
-    method >>= 1;
-  }
-  switch (index) {
-    case 0:
-      return "None";
-    case 1:
-      return "Basic";
-    case 2:
-      return "Digest";
-    default:
-      break;
-  }
-
-  return "Unknown";
-}
-
 static GstRTSPResult
 gst_wfdrtspsrc_try_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
     GstRTSPMessage * request, GstRTSPMessage * response,
@@ -2371,9 +2152,6 @@ gst_wfdrtspsrc_try_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
   GstRTSPStatusCode thecode = GST_RTSP_STS_OK;
 
   GST_DEBUG_OBJECT (src, "sending message");
-
-  if (src->debug)
-    wfd_rtsp_manager_message_dump (request);
 
   res = gst_wfdrtspsrc_connection_send (src, conn, request, src->ptcp_timeout);
   if (res < 0)
@@ -2385,9 +2163,6 @@ next:
   res = gst_wfdrtspsrc_connection_receive (src, conn, response, src->ptcp_timeout);
   if (res < 0)
     goto receive_error;
-
-  if (src->debug)
-    wfd_rtsp_manager_message_dump (response);
 
   switch (response->type) {
     case GST_RTSP_MESSAGE_REQUEST:
@@ -2670,59 +2445,20 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
   GstRTSPStatusCode code = GST_RTSP_STS_OK;
   GstRTSPUrl *url;
   gchar *hval;
-  GstRTSPConnection *conn;
   gchar *transports = NULL;
 
-  if (src->conninfo.connection) {
-    url = gst_rtsp_connection_get_url (src->conninfo.connection);
-    /* we initially allow all configured lower transports. based on the URL
-     * transports and the replies from the server we narrow them down. */
-    protocols = url->transports & GST_RTSP_LOWER_TRANS_UDP;
-  } else {
-    url = NULL;
-    protocols = GST_RTSP_LOWER_TRANS_UDP;
-  }
+  if (!src->conninfo.connection || !src->conninfo.connected)
+    goto no_connection;
 
+  url = gst_rtsp_connection_get_url (src->conninfo.connection);
+  protocols = url->transports & GST_RTSP_LOWER_TRANS_UDP;
   if (protocols == 0)
     goto no_protocols;
 
+  GST_DEBUG_OBJECT (src, "doing setup of with %s", GST_STR_NULL(src->conninfo.location));
+
   manager = src->manager;
-
-  manager->conninfo.location = g_strdup (src->conninfo.location);
-  GST_DEBUG_OBJECT (src, " setup: %s",
-    GST_STR_NULL (manager->conninfo.location));
-
-  manager->control_url = g_strdup (src->conninfo.url_str);
-  GST_DEBUG_OBJECT (src, " setup: %s",
-    GST_STR_NULL (manager->control_url));
-
   manager->control_connection = src->conninfo.connection;
-  GST_DEBUG_OBJECT (src, " setup: %p", manager->control_connection);
-
-  /* skip setup if we have no URL for it */
-  if (manager->conninfo.location == NULL) {
-    GST_DEBUG_OBJECT (src, "no URL for setup");
-    goto no_setup;
-  }
-
-  if (src->conninfo.connection == NULL) {
-    GST_DEBUG_OBJECT (src, "try to connect manager %p", manager);
-    if (!gst_wfdrtspsrc_conninfo_connect (src, &manager->conninfo)) {
-      GST_DEBUG_OBJECT (src, "failed to connect %p", manager);
-      goto no_setup;
-    }
-    conn = manager->conninfo.connection;
-  } else {
-    conn = src->conninfo.connection;
-  }
-  GST_DEBUG_OBJECT (src, "doing setup of manager %p with %s", manager,
-      manager->conninfo.location);
-
-  /* wfd use only UDP protocol for setup */
-  /* This statement can't be FALSE
-  if (!(protocols & GST_RTSP_LOWER_TRANS_UDP))
-    goto no_protocols;
-  */
 
   GST_DEBUG_OBJECT (src, "protocols = 0x%x", protocols);
   /* create a string with first transport in line */
@@ -2737,9 +2473,7 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
   }
 
   /* create SETUP request */
-  res =
-      gst_rtsp_message_init_request (&request, GST_RTSP_SETUP,
-      manager->conninfo.location);
+  res = gst_rtsp_message_init_request (&request, GST_RTSP_SETUP, src->conninfo.location);
   if (res < 0) {
     g_free (transports);
     goto create_request_failed;
@@ -2758,7 +2492,7 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
   }
 
   /* handle the code ourselves */
-  if ((res = gst_wfdrtspsrc_send (src, conn, &request, &response, &code) < 0))
+  if ((res = gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response, &code) < 0))
     goto send_error;
 
   switch (code) {
@@ -2813,9 +2547,8 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
       goto setup_failed;
     }
 
-    if(src->manager->enable_pad_probe) {
+    if(src->manager->enable_pad_probe)
       wfd_rtsp_manager_enable_pad_probe(src->manager);
-    }
 
     /* clean up our transport struct */
     gst_rtsp_transport_init (&transport);
@@ -2829,17 +2562,17 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
   return TRUE;
 
   /* ERRORS */
+no_connection:
+  {
+    GST_ELEMENT_ERROR (src, RESOURCE, READ, (NULL),
+        ("Could not connct to server, no connection."));
+    return FALSE;
+  }
 no_protocols:
   {
     /* no transport possible, post an error and stop */
     GST_ELEMENT_ERROR (src, RESOURCE, READ, (NULL),
         ("Could not connect to server, no protocols left"));
-    return FALSE;
-  }
-no_setup:
-  {
-    GST_ELEMENT_ERROR (src, RESOURCE, READ, (NULL),
-        ("Could not setup"));
     return FALSE;
   }
 create_request_failed:
@@ -3072,9 +2805,6 @@ gst_wfdrtspsrc_close (GstWFDRTSPSrc * src, gboolean only_close)
   GstRTSPMessage request = { 0 };
   GstRTSPMessage response = { 0 };
   GstRTSPResult res = GST_RTSP_OK;
-  gchar *control;
-  gchar *setup_url;
-  GstWFDRTSPConnInfo *info;
 
   GST_DEBUG_OBJECT (src, "TEARDOWN...");
 
@@ -3086,38 +2816,22 @@ gst_wfdrtspsrc_close (GstWFDRTSPSrc * src, gboolean only_close)
   if (only_close)
     goto close;
 
-  /* construct a control url */
-  control = src->conninfo.url_str;
+  if (!src->conninfo.connection || !src->conninfo.connected)
+    goto close;
 
   if (!(src->methods & (GST_RTSP_PLAY | GST_RTSP_TEARDOWN)))
     goto not_supported;
 
   manager = src->manager;
 
-  /* try aggregate control first but do non-aggregate control otherwise */
-  if (control)
-    setup_url = control;
-  else if ((setup_url = manager->conninfo.location) == NULL)
-    goto  close;
-
-  if (src->conninfo.connection) {
-    info = &src->conninfo;
-  } else if (manager->conninfo.connection) {
-    info = &manager->conninfo;
-  } else {
-    goto close;
-  }
-  if (!info->connected)
-    goto close;
-
   /* do TEARDOWN */
   res =
-      gst_rtsp_message_init_request (&request, GST_RTSP_TEARDOWN, setup_url);
+      gst_rtsp_message_init_request (&request, GST_RTSP_TEARDOWN, src->conninfo.url_str);
   if (res < 0)
     goto create_request_failed;
 
   if ((res =
-          gst_wfdrtspsrc_send (src, info->connection, &request, &response,
+          gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response,
               NULL)) < 0)
     goto send_error;
 
@@ -3260,12 +2974,11 @@ gst_wfdrtspsrc_play (GstWFDRTSPSrc * src)
   GstRTSPResult res = GST_RTSP_OK;
   gchar *hval;
   gint hval_idx;
-  gchar *control;
-  WFDRTSPManager *manager;
-  gchar *setup_url;
-  GstRTSPConnection *conn;
 
   GST_DEBUG_OBJECT (src, "PLAY...");
+
+  if (!src->conninfo.connection || !src->conninfo.connected)
+    goto done;
 
   if (!(src->methods & GST_RTSP_PLAY))
     goto not_supported;
@@ -3273,37 +2986,16 @@ gst_wfdrtspsrc_play (GstWFDRTSPSrc * src)
   if (src->state == GST_RTSP_STATE_PLAYING)
     goto was_playing;
 
-  if (!src->conninfo.connection || !src->conninfo.connected)
-    goto done;
-
   gst_element_set_state (GST_ELEMENT_CAST (src), GST_STATE_PLAYING);
 
-  /* construct a control url */
-  control = src->conninfo.url_str;
-
-  manager = src->manager;
-  /* try aggregate control first but do non-aggregate control otherwise */
-  if (control)
-    setup_url = control;
-  else if ((setup_url = manager->conninfo.location) == NULL)
-    goto skip;
-
-  if (src->conninfo.connection) {
-    conn = src->conninfo.connection;
-  } else if (manager->conninfo.connection) {
-    conn = manager->conninfo.connection;
-  } else {
-    goto skip;
-  }
-
   /* do play */
-  res = gst_rtsp_message_init_request (&request, GST_RTSP_PLAY, setup_url);
+  res = gst_rtsp_message_init_request (&request, GST_RTSP_PLAY, src->conninfo.url_str);
   if (res < 0)
     goto create_request_failed;
 
   gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
 
-  if ((res = gst_wfdrtspsrc_send (src, conn, &request, &response, NULL)) < 0)
+  if ((res = gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response, NULL)) < 0)
     goto send_error;
 
   gst_rtsp_message_unset (&request);
@@ -3318,15 +3010,10 @@ gst_wfdrtspsrc_play (GstWFDRTSPSrc * src)
 
   gst_rtsp_message_unset (&response);
 
-skip:
   /* configure the caps of the streams after we parsed all headers. */
   gst_wfdrtspsrc_configure_caps (src);
 
   src->state = GST_RTSP_STATE_PLAYING;
-
-  /* mark discont */
-  GST_DEBUG_OBJECT (src, "mark DISCONT");
-  manager->discont = TRUE;
 
 done:
   gst_wfdrtspsrc_loop_end_cmd (src, CMD_PLAY, res);
@@ -3374,12 +3061,11 @@ gst_wfdrtspsrc_pause (GstWFDRTSPSrc * src)
   GstRTSPResult res = GST_RTSP_OK;
   GstRTSPMessage request = { 0 };
   GstRTSPMessage response = { 0 };
-  WFDRTSPManager *manager;
-  GstRTSPConnection *conn;
-  gchar *setup_url;
-  gchar *control;
 
   GST_DEBUG_OBJECT (src, "PAUSE...");
+
+  if (!src->conninfo.connection || !src->conninfo.connected)
+    goto no_connection;
 
   if (!(src->methods & GST_RTSP_PAUSE))
     goto not_supported;
@@ -3387,34 +3073,12 @@ gst_wfdrtspsrc_pause (GstWFDRTSPSrc * src)
   if (src->state == GST_RTSP_STATE_READY)
     goto was_paused;
 
-  if (!src->conninfo.connection || !src->conninfo.connected)
-    goto no_connection;
-
-  /* construct a control url */
-  control = src->conninfo.url_str;
-
-  manager = src->manager;
-
-  /* try aggregate control first but do non-aggregate control otherwise */
-  if (control)
-    setup_url = control;
-  else if ((setup_url = manager->conninfo.location) == NULL)
-    goto no_connection;
-
-  if (src->conninfo.connection) {
-    conn = src->conninfo.connection;
-  } else if (manager->conninfo.connection) {
-    conn = manager->conninfo.connection;
-  } else {
-    goto no_connection;
-  }
-
-  if (gst_rtsp_message_init_request (&request, GST_RTSP_PAUSE, setup_url) < 0)
+  if (gst_rtsp_message_init_request (&request, GST_RTSP_PAUSE, src->conninfo.url_str) < 0)
     goto create_request_failed;
 
   gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar *)src->user_agent);
 
-  if ((res = gst_wfdrtspsrc_send (src, conn, &request, &response, NULL)) < 0)
+  if ((res = gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response, NULL)) < 0)
     goto send_error;
 
   gst_rtsp_message_unset (&request);
@@ -3523,9 +3187,9 @@ gst_wfdrtspsrc_handle_message (GstBin * bin, GstMessage * message)
 static void
 gst_wfdrtspsrc_thread (GstWFDRTSPSrc * src)
 {
-  gint cmd;
-  GstRTSPResult ret;
+  GstRTSPResult ret = GST_RTSP_OK;
   gboolean running = FALSE;
+  gint cmd;
 
   GST_OBJECT_LOCK (src);
   cmd = src->loop_cmd;
@@ -3560,7 +3224,7 @@ gst_wfdrtspsrc_thread (GstWFDRTSPSrc * src)
     case CMD_LOOP:
       running = gst_wfdrtspsrc_loop (src);
       break;
-     case CMD_SEND_REQUEST:
+     case CMD_REQUEST:
       ret = gst_wfdrtspsrc_send_request (src);
       if (ret == GST_RTSP_OK)
         running = TRUE;
@@ -3738,6 +3402,29 @@ gst_wfdrtspsrc_send_event (GstElement * element, GstEvent * event)
   return res;
 }
 
+static void
+gst_wfdrtspsrc_set_uibc (GstWFDRTSPSrc * src, gboolean enable)
+{
+  GST_OBJECT_LOCK(src);
+  memset (&src->request_param, 0, sizeof(GstWFDRequestParam));
+  src->request_param.type = WFD_UIBC_SETTING;
+  src->request_param.uibc_setting.enable = enable;
+  GST_OBJECT_UNLOCK(src);
+
+  gst_wfdrtspsrc_loop_send_cmd(src, CMD_REQUEST);
+}
+
+
+static void
+gst_wfdrtspsrc_set_stanby (GstWFDRTSPSrc * src)
+{
+  GST_OBJECT_LOCK(src);
+  memset (&src->request_param, 0, sizeof(GstWFDRequestParam));
+  src->request_param.type = WFD_STANDBY;
+  GST_OBJECT_UNLOCK(src);
+
+  gst_wfdrtspsrc_loop_send_cmd(src, CMD_REQUEST);
+}
 
 /*** GSTURIHANDLER INTERFACE *************************************************/
 static GstURIType

@@ -140,10 +140,8 @@ wfd_ts_parse_pes_header (const guint8 * data, gsize length, WFDPESHeader * res)
 
   res->header_size += 9;        /* We add 9 since that's the offset
                                  * of the field in the header*/
-  GST_DEBUG ("header_size : %d", res->header_size);
 
   /* PTS/DTS */
-
   /* PTS_DTS_flags == 0x01 is invalid */
   if (G_UNLIKELY ((flags >> 6) == 0x01)) {
     GST_WARNING ("Invalid PTS_DTS_flag (0x01 is forbidden)");
@@ -413,9 +411,6 @@ stuffing_byte:
 #endif
 
 done_parsing:
-  GST_DEBUG ("origlength:%" G_GSIZE_FORMAT ", length:%" G_GSIZE_FORMAT,
-      origlength, length);
-
   res->header_size = origlength - length;
   ret = PES_PARSING_OK;
 

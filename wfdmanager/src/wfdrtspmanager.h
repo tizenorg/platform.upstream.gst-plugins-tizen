@@ -89,7 +89,6 @@ struct _WFDRTSPManager {
   /* pad we expose or NULL when it does not have an actual pad */
   GstPad       *srcpad;
   gboolean      eos;
-  gboolean      discont;
   gboolean         need_activate;
   GRecMutex state_rec_lock;
 
@@ -107,11 +106,8 @@ struct _WFDRTSPManager {
   GstElement   *udpsink[2];
   GstPad       *rtcppad;
 
-  /* fakesrc for sending dummy data */
-  GstElement   *fakesrc;
 
   /* original control url */
-  gchar        *control_url;
   GstRTSPConnection *control_connection;
 
   guint64       seqbase;
@@ -121,7 +117,6 @@ struct _WFDRTSPManager {
   GstWFDRTSPConnInfo  conninfo;
 
   /* pipeline */
-  GstElement      *requester;
   GstElement      *session;
   GstElement      *wfdrtpbuffer;
 
@@ -155,7 +150,6 @@ void
 wfd_rtsp_manager_enable_pad_probe(WFDRTSPManager * manager);
 void
 wfd_rtsp_manager_flush (WFDRTSPManager * manager, gboolean flush);
-
 G_END_DECLS
 
 #endif /* __GST_WFD_RTSP_MANAGER_H__ */

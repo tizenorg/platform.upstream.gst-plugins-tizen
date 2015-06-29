@@ -95,7 +95,6 @@ enum
 #define DEFAULT_UDP_BUFFER_SIZE  0x80000
 #define DEFAULT_UDP_TIMEOUT          10000000
 
-
 G_DEFINE_TYPE (WFDRTSPManager, wfd_rtsp_manager, G_TYPE_OBJECT);
 
 /* GObject vmethods */
@@ -112,8 +111,8 @@ typedef struct _RTSPKeyValue
 {
   GstRTSPHeaderField field;
   gchar *value;
+  gchar *custom_key;            /* custom header string (field is INVALID then) */
 } RTSPKeyValue;
-
 
 static void
 wfd_rtsp_manager_key_value_foreach (GArray * array, GFunc func, gpointer user_data)
@@ -126,14 +125,18 @@ wfd_rtsp_manager_key_value_foreach (GArray * array, GFunc func, gpointer user_da
     (*func) (&g_array_index (array, RTSPKeyValue, i), user_data);
   }
 }
-
 static void
 wfd_rtsp_manager_dump_key_value (gpointer data, gpointer user_data G_GNUC_UNUSED)
 {
   RTSPKeyValue *key_value = (RTSPKeyValue *) data;
+  const gchar *key_string;
 
-  GST_ERROR (" key: '%s', value: '%s'",
-      gst_rtsp_header_as_text (key_value->field), key_value->value);
+  if (key_value->custom_key != NULL)
+    key_string = key_value->custom_key;
+  else
+    key_string = gst_rtsp_header_as_text (key_value->field);
+
+  GST_ERROR ("   key: '%s', value: '%s'\n", key_string, key_value->value);
 }
 
 GstRTSPResult
@@ -267,6 +270,7 @@ static void
 wfd_rtsp_manager_init (WFDRTSPManager * manager)
 {
   GstStructure *s = NULL;
+  gint i = 0;
 
   /* initialize variables */
   manager->do_rtcp = DEFAULT_DO_RTCP;
@@ -276,12 +280,22 @@ wfd_rtsp_manager_init (WFDRTSPManager * manager)
   manager->enable_pad_probe = FALSE;
 
   manager->eos = FALSE;
-  manager->discont = TRUE;
   manager->seqbase = GST_CLOCK_TIME_NONE;
   manager->timebase = GST_CLOCK_TIME_NONE;
   manager->is_ipv6 = FALSE;
   manager->caps = gst_caps_new_simple ("application/x-rtp",
                   "media", G_TYPE_STRING, "video", "payload", G_TYPE_INT, 33, NULL);
+
+  manager->srcpad = NULL;
+  manager->rtcppad = NULL;
+  manager->blockedpad = NULL;
+  manager->session = NULL;
+  manager->wfdrtpbuffer = NULL;
+  for (i=0; i<2; i++) {
+    manager->udpsrc[i] = NULL;
+    manager->udpsink[i] = NULL;
+    manager->channelpad[i] = NULL;
+  }
 
   s = gst_caps_get_structure (manager->caps, 0);
   gst_structure_set (s, "clock-rate", G_TYPE_INT, 90000, NULL);
@@ -299,18 +313,13 @@ wfd_rtsp_manager_finalize (GObject * object)
   WFDRTSPManager *manager;
   gint i;
 
-  GST_INFO ("finalize");
   manager = WFD_RTSP_MANAGER_CAST (object);
 
   if (manager->caps)
     gst_caps_unref (manager->caps);
   manager->caps = NULL;
 
-  if (manager->conninfo.location)
-    g_free (manager->conninfo.location);
-  manager->conninfo.location = NULL;
-
-  for (i=0; i <1; i++) {
+  for (i=0; i <2; i++) {
     if (manager->udpsrc[i]) {
       gst_element_set_state (manager->udpsrc[i], GST_STATE_NULL);
       gst_bin_remove (GST_BIN_CAST (manager->wfdrtspsrc), manager->udpsrc[i]);
@@ -328,13 +337,6 @@ wfd_rtsp_manager_finalize (GObject * object)
       manager->udpsink[i] = NULL;
     }
   }
-  if (manager->requester) {
-    gst_element_set_state (manager->requester, GST_STATE_NULL);
-    gst_bin_remove (GST_BIN_CAST (manager->wfdrtspsrc), manager->requester);
-    gst_object_unref (manager->requester);
-    manager->requester = NULL;
-  }
-
   if (manager->session) {
     gst_element_set_state (manager->session, GST_STATE_NULL);
     gst_bin_remove (GST_BIN_CAST (manager->wfdrtspsrc), manager->session);
@@ -346,17 +348,6 @@ wfd_rtsp_manager_finalize (GObject * object)
     gst_bin_remove (GST_BIN_CAST (manager->wfdrtspsrc), manager->wfdrtpbuffer);
     gst_object_unref (manager->wfdrtpbuffer);
     manager->wfdrtpbuffer = NULL;
-  }
-  if (manager->fakesrc) {
-    gst_element_set_state (manager->fakesrc, GST_STATE_NULL);
-    gst_bin_remove (GST_BIN_CAST (manager->wfdrtspsrc), manager->fakesrc);
-    gst_object_unref (manager->fakesrc);
-    manager->fakesrc = NULL;
-  }
-  if (manager->srcpad) {
-    gst_pad_set_active (manager->srcpad, FALSE);
-    gst_element_remove_pad (GST_ELEMENT_CAST (manager->wfdrtspsrc), manager->srcpad);
-    manager->srcpad = NULL;
   }
   if (manager->rtcppad) {
     gst_object_unref (manager->rtcppad);
@@ -446,13 +437,6 @@ static void wfd_rtsp_manager_get_property (GObject * object, guint prop_id,
   }
 }
 
-static void
-pad_unblocked (GstPad * pad, gboolean blocked, WFDRTSPManager *manager)
-{
-  GST_DEBUG_OBJECT (manager, "pad %s:%s unblocked", GST_DEBUG_PAD_NAME (pad));
-}
-
-
 static gboolean
 wfd_rtsp_manager_activate (WFDRTSPManager *manager)
 {
@@ -491,22 +475,15 @@ pad_blocked (GstPad * pad, gboolean blocked, WFDRTSPManager *manager)
       GST_DEBUG_PAD_NAME (pad));
 
   /* activate the streams */
-//  GST_OBJECT_LOCK (manager);
   if (!manager->need_activate)
     goto was_ok;
 
   manager->need_activate = FALSE;
-//  GST_OBJECT_UNLOCK (manager);
 
   wfd_rtsp_manager_activate (manager);
 
-  return;
-
 was_ok:
-  {
-//    GST_OBJECT_UNLOCK (manager);
-    return;
-  }
+  return;
 }
 
 
@@ -736,57 +713,6 @@ wfd_rtsp_manager_configure_udp_sinks ( WFDRTSPManager * manager, GstRTSPTranspor
   if (destination == NULL && (do_rtp || do_rtcp))
     goto no_destination;
 
-  /* try to construct the fakesrc to the RTP port of the server to open up any
-   * NAT firewalls */
-  if (do_rtp) {
-    GST_DEBUG_OBJECT (manager, "configure RTP UDP sink for %s:%d", destination,
-        rtp_port);
-
-    uri = g_strdup_printf ("udp://%s:%d", destination, rtp_port);
-    manager->udpsink[0] = gst_element_make_from_uri (GST_URI_SINK, uri, NULL, NULL);
-    g_free (uri);
-    if (manager->udpsink[0] == NULL)
-      goto no_sink_element;
-
-    /* don't join multicast group, we will have the source socket do that */
-    /* no sync or async state changes needed */
-    g_object_set (G_OBJECT (manager->udpsink[0]), "auto-multicast", FALSE,
-        "loop", FALSE, "sync", FALSE, "async", FALSE, NULL);
-
-    if (manager->udpsrc[0]) {
-      /* configure socket, we give it the same UDP socket as the udpsrc for RTP
-       * so that NAT firewalls will open a hole for us */
-      g_object_get (G_OBJECT (manager->udpsrc[0]), "socket", &sockfd, NULL);
-      GST_DEBUG_OBJECT (manager, "RTP UDP src has sock %d", sockfd);
-      /* configure socket and make sure udpsink does not close it when shutting
-       * down, it belongs to udpsrc after all. */
-      g_object_set (G_OBJECT (manager->udpsink[0]), "socket", sockfd,
-          "close-socket", FALSE, NULL);
-    }
-
-    /* the source for the dummy packets to open up NAT */
-    manager->fakesrc = gst_element_factory_make ("fakesrc", NULL);
-    if (manager->fakesrc == NULL)
-      goto no_fakesrc_element;
-
-    /* random data in 5 buffers, a size of 200 bytes should be fine */
-    g_object_set (G_OBJECT (manager->fakesrc), "filltype", 3, "num-buffers", 5,
-        "sizetype", 2, "sizemax", 200, "silent", TRUE, NULL);
-
-    /* we don't want to consider this a sink */
-    GST_OBJECT_FLAG_UNSET (manager->udpsink[0], GST_ELEMENT_FLAG_SINK);
-
-    /* keep everything locked */
-    gst_element_set_locked_state (manager->udpsink[0], TRUE);
-    gst_element_set_locked_state (manager->fakesrc, TRUE);
-
-    gst_object_ref (manager->udpsink[0]);
-    gst_bin_add (GST_BIN_CAST (manager->wfdrtspsrc), manager->udpsink[0]);
-    gst_object_ref (manager->fakesrc);
-    gst_bin_add (GST_BIN_CAST (manager->wfdrtspsrc), manager->fakesrc);
-
-    gst_element_link (manager->fakesrc, manager->udpsink[0]);
-  }
   if (do_rtcp) {
     GST_DEBUG_OBJECT (manager, "configure RTCP UDP sink for %s:%d", destination,
         rtcp_port);
@@ -847,11 +773,6 @@ no_destination:
 no_sink_element:
   {
     GST_DEBUG_OBJECT (manager, "no UDP sink element found");
-    return FALSE;
-  }
-no_fakesrc_element:
-  {
-    GST_DEBUG_OBJECT (manager, "no fakesrc element found");
     return FALSE;
   }
 }
@@ -927,33 +848,19 @@ request_pt_map_for_session (GstElement * session, guint session_id, guint pt, WF
   return caps;
 }
 
-
-static void
-wfd_rtsp_manager_do_stream_eos (WFDRTSPManager * manager)
-{
-  GST_DEBUG_OBJECT (manager, "setting for session  to EOS");
-
-  if (manager->eos)
-    goto was_eos;
-
-  manager->eos = TRUE;
-  //gst_wfdrtspsrc_stream_push_event (src, manager, gst_event_new_eos (), TRUE);
-  return;
-
-  /* ERRORS */
-was_eos:
-  {
-    GST_DEBUG_OBJECT (manager, "already EOS");
-    return;
-  }
-}
-
 static gboolean
-wfd_rtsp_manager_set_manager (WFDRTSPManager * manager)
+wfd_rtsp_manager_configure_manager (WFDRTSPManager * manager)
 {
+  GstPad *pad = NULL;
+
   g_return_val_if_fail (manager, FALSE);
 
-  if (manager->session) {
+  /* construct wfdrtspsrc */
+  manager->session = gst_element_factory_make ("rtpsession", "wfdrtspsrc_session");
+  if (G_UNLIKELY (manager->session == NULL)) {
+    GST_ERROR_OBJECT (manager, "could not create gstrtpsession element");
+    return FALSE;
+  }  else {
     g_signal_connect (manager->session, "on-bye-ssrc", (GCallback) on_bye_ssrc,
         manager);
     g_signal_connect (manager->session, "on-bye-timeout", (GCallback) on_timeout,
@@ -964,19 +871,73 @@ wfd_rtsp_manager_set_manager (WFDRTSPManager * manager)
         (GCallback) on_ssrc_active, manager);
     g_signal_connect (manager->session, "on-new-ssrc", (GCallback) on_new_ssrc,
         manager);
-   g_signal_connect (manager->session, "request-pt-map",
+    g_signal_connect (manager->session, "request-pt-map",
         (GCallback) request_pt_map_for_session, manager);
 
     g_object_set (G_OBJECT(manager->session), "rtcp-min-interval", (guint64)1000000000, NULL);
+
+    manager->channelpad[0] = gst_element_get_request_pad (manager->session, "recv_rtp_sink");
+    if (G_UNLIKELY (manager->channelpad[0]  == NULL)) {
+      GST_ERROR_OBJECT (manager, "could not create rtp channel pad");
+      return FALSE;
+    }
+
+    manager->channelpad[1] = gst_element_get_request_pad (manager->session, "recv_rtcp_sink");
+    if (G_UNLIKELY (manager->channelpad[1]  == NULL)) {
+      GST_ERROR_OBJECT (manager, "could not create rtcp channel pad");
+      return FALSE;
+    }
+
+    if (!gst_bin_add(GST_BIN_CAST(manager->wfdrtspsrc), manager->session)) {
+      GST_ERROR_OBJECT (manager, "failed to add rtpsession to wfdrtspsrc");
+      return FALSE;
+    }
   }
 
-  if (manager->wfdrtpbuffer != NULL) {
+  manager->wfdrtpbuffer = gst_element_factory_make ("wfdrtpbuffer", "wfdrtspsrc_wfdrtpbuffer");
+  if (G_UNLIKELY (manager->wfdrtpbuffer == NULL)) {
+    GST_ERROR_OBJECT (manager, "could not create wfdrtpbuffer element");
+    return FALSE;
+  } else {
     /* configure latency and packet lost */
     g_object_set (manager->wfdrtpbuffer, "latency", manager->latency, NULL);
 
     g_signal_connect (manager->wfdrtpbuffer, "request-pt-map",
 	 (GCallback) request_pt_map_for_wfdrtpbuffer, manager);
+
+    if (!gst_bin_add(GST_BIN_CAST(manager->wfdrtspsrc), manager->wfdrtpbuffer)) {
+      GST_ERROR_OBJECT (manager, "failed to add wfdrtpbuffer to wfdrtspsrc");
+      return FALSE;
+    }
   }
+
+  if (!gst_element_link_many(manager->session, manager->wfdrtpbuffer, NULL)) {
+    GST_ERROR_OBJECT (manager, "failed to link elements for wfdrtspsrc");
+    return FALSE;
+  }
+
+  if (!gst_element_sync_state_with_parent(manager->session)) {
+    GST_ERROR_OBJECT (manager, "failed for %s to sync state with wfdrtspsrc", GST_ELEMENT_NAME(manager->session));
+    return FALSE;
+  }
+
+  if (!gst_element_sync_state_with_parent(manager->wfdrtpbuffer)) {
+    GST_ERROR_OBJECT (manager, "failed for %s to sync state with wfdrtspsrc", GST_ELEMENT_NAME(manager->wfdrtpbuffer));
+    return FALSE;
+  }
+
+  /* set ghost pad */
+  pad = gst_element_get_static_pad (manager->wfdrtpbuffer, "src");
+  if (G_UNLIKELY (pad == NULL)) {
+    GST_ERROR_OBJECT (manager, "failed to get src pad of wfdrtpbuffer for setting ghost pad of wfdrtspsrc");
+    return FALSE;
+  }
+  if (!gst_ghost_pad_set_target (GST_GHOST_PAD (manager->srcpad), pad)) {
+    GST_ERROR_OBJECT (manager, "failed to set target pad of wfdrtpbuffer ghost pad");
+    gst_object_unref (pad);
+    return FALSE;
+  }
+  gst_object_unref (pad);
 
   return TRUE;
 }
@@ -986,12 +947,11 @@ gboolean
 wfd_rtsp_manager_configure_transport (WFDRTSPManager * manager,
     GstRTSPTransport * transport, gint rtpport, gint rtcpport)
 {
-  GstStructure *s;
-  const gchar *mime;
+  const gchar * mime;
+
+  g_return_val_if_fail(transport,  FALSE);
 
   GST_DEBUG_OBJECT (manager, "configuring transport");
-
-  s = gst_caps_get_structure (manager->caps, 0);
 
   /* get the proper mime type for this manager now */
   if (gst_rtsp_transport_get_mime (transport->trans, &mime) < 0)
@@ -1001,9 +961,8 @@ wfd_rtsp_manager_configure_transport (WFDRTSPManager * manager,
 
   /* configure the final mime type */
   GST_DEBUG_OBJECT (manager, "setting mime to %s", mime);
-  gst_structure_set_name (s, mime);
 
-  if (!wfd_rtsp_manager_set_manager (manager))
+  if (!wfd_rtsp_manager_configure_manager (manager))
     goto no_manager;
 
   switch (transport->lower_transport) {
@@ -1048,9 +1007,14 @@ wfd_rtsp_manager_push_event (WFDRTSPManager * manager, GstEvent * event, gboolea
 {
   gboolean res = TRUE;
 
+  g_return_val_if_fail(manager,  FALSE);
+  g_return_val_if_fail(event && GST_IS_EVENT(event),  FALSE);
+
   /* only wfdrtspsrcs that have a connection to the outside world */
   if (manager->srcpad == NULL)
     goto done;
+
+  GST_DEBUG_OBJECT(manager, "push %s envet", GST_EVENT_TYPE_NAME(event));
 
   if (source && manager->udpsrc[0]) {
     gst_event_ref (event);
@@ -1069,7 +1033,7 @@ done:
   return res;
 }
 
-/*static*/ void
+void
 wfd_rtsp_manager_flush (WFDRTSPManager * manager, gboolean flush)
 {
   GstEvent *event = NULL;
@@ -1093,7 +1057,7 @@ wfd_rtsp_manager_flush (WFDRTSPManager * manager, gboolean flush)
   if(flush) {
     GST_DEBUG_OBJECT (manager, "need to pause udpsrc");
 
-    for (i=0; i<1; i++) {
+    for (i=0; i<2; i++) {
       if (manager->udpsrc[i]) {
         gst_element_set_locked_state (manager->udpsrc[i], TRUE);
         gst_element_set_state (manager->udpsrc[i], GST_STATE_PAUSED);
@@ -1105,13 +1069,11 @@ wfd_rtsp_manager_flush (WFDRTSPManager * manager, gboolean flush)
 
   if (manager->session)
     gst_element_set_base_time (GST_ELEMENT_CAST (manager->session), base_time);
-  if (manager->requester)
-    gst_element_set_base_time (GST_ELEMENT_CAST (manager->requester), base_time);
   if (manager->wfdrtpbuffer)
     gst_element_set_base_time (GST_ELEMENT_CAST (manager->wfdrtpbuffer), base_time);
 
   /* make running time start start at 0 again */
-  for (i = 0; i < 1; i++) {
+  for (i = 0; i < 2; i++) {
     if (manager->udpsrc[i]) {
       if (base_time != GST_CLOCK_TIME_NONE)
         gst_element_set_base_time (manager->udpsrc[i], base_time);
@@ -1125,7 +1087,7 @@ wfd_rtsp_manager_flush (WFDRTSPManager * manager, gboolean flush)
   if(!flush) {
     GST_DEBUG_OBJECT (manager, "need to run udpsrc");
 
-    for (i=0; i<1; i++) {
+    for (i=0; i<2; i++) {
       if (manager->udpsrc[i]) {
         gst_element_set_locked_state (manager->udpsrc[i], FALSE);
         gst_element_set_state (manager->udpsrc[i], GST_STATE_PLAYING);
@@ -1166,17 +1128,15 @@ wfd_rtsp_manager_pad_probe_cb(GstPad * pad, GstPadProbeInfo *info, gpointer u_da
 
     if (GST_EVENT_TYPE (event) == GST_EVENT_SEGMENT) {
       gst_event_parse_segment (event, &segment);
-
-      if (segment) {
-        GST_DEBUG_OBJECT (WFD_RTSP_MANAGER (u_data), "NEWSEGMENT : %" G_GINT64_FORMAT " -- %" G_GINT64_FORMAT ", time %" G_GINT64_FORMAT " \n",
-                         segment->start, segment->stop, segment->time);
-      }
+      if (segment)
+        GST_DEBUG_OBJECT (WFD_RTSP_MANAGER (u_data), "NEWSEGMENT : %"
+            G_GINT64_FORMAT " -- %" G_GINT64_FORMAT ", time %" G_GINT64_FORMAT " \n",
+             segment->start, segment->stop, segment->time);
     }
   }
 
-  if ( parent ) {
+  if ( parent )
     gst_object_unref(parent);
-  }
 
   return GST_PAD_PROBE_OK;
 }
@@ -1200,6 +1160,14 @@ void wfd_rtsp_manager_enable_pad_probe(WFDRTSPManager * manager)
   }
 
   if(manager->session) {
+    pad = gst_element_get_static_pad(manager->session, "recv_rtp_sink");
+    if (pad) {
+      if( gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_DATA_DOWNSTREAM, wfd_rtsp_manager_pad_probe_cb, (gpointer)manager, NULL)) {
+        GST_DEBUG_OBJECT (manager, "added pad probe (pad : %s, element : %s)", gst_pad_get_name(pad), gst_element_get_name(manager->session));
+      }
+      gst_object_unref (pad);
+      pad = NULL;
+    }
     pad = gst_element_get_static_pad(manager->session, "recv_rtp_src");
     if (pad) {
       if( gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_DATA_DOWNSTREAM, wfd_rtsp_manager_pad_probe_cb, (gpointer)manager, NULL)) {
@@ -1219,7 +1187,15 @@ void wfd_rtsp_manager_enable_pad_probe(WFDRTSPManager * manager)
       gst_object_unref (pad);
       pad = NULL;
     }
+
+    pad = gst_element_get_static_pad(manager->wfdrtpbuffer, "src");
+    if (pad) {
+      if( gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_DATA_DOWNSTREAM, wfd_rtsp_manager_pad_probe_cb, (gpointer)manager, NULL)) {
+        GST_DEBUG_OBJECT (manager, "added pad probe (pad : %s, element : %s)", gst_pad_get_name(pad), gst_element_get_name(manager->wfdrtpbuffer));
+      }
+      gst_object_unref (pad);
+      pad = NULL;
+    }
   }
 
 }
-

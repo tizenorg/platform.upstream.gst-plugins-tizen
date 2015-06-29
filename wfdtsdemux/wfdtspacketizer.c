@@ -1638,6 +1638,10 @@ _reevaluate_group_pcr_offset (WFDTSPCR * pcrtable, PCROffsetGroup * group)
         GST_DEBUG ("Wraparound prev-cur (guess_offset:%" GST_TIME_FORMAT
             ") bitrate:%" G_GUINT64_FORMAT,
             GST_TIME_ARGS (PCRTIME_TO_GSTTIME (guess_offset)), lastbr);
+        if(prevbr == 0) {
+          GST_ERROR ("Division by zero error, prevbr is 0");
+          continue;
+        }
         diffprev = (float) 100.0 *(ABSDIFF (prevbr, lastbr)) / (float) prevbr;
         GST_DEBUG ("Difference with previous bitrate:%f", diffprev);
         if (diffprev < 10.0) {
