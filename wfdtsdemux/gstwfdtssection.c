@@ -1195,6 +1195,8 @@ gst_wfd_ts_section_new (guint16 pid, guint8 * data, gsize data_size)
   guint8 table_id;
   guint16 section_length;
 
+  g_return_val_if_fail (data, NULL);
+
   /* Check for length */
   section_length = GST_READ_UINT16_BE (data + 1) & 0x0FFF;
   if (G_UNLIKELY (data_size < section_length + 3))

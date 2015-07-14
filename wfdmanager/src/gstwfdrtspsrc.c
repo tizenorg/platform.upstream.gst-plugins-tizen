@@ -116,7 +116,7 @@ enum
   SIGNAL_RESUME,
   SIGNAL_CLOSE,
   SIGNAL_SET_UIBC,
-  SIGNAL_SET_STANBY,
+  SIGNAL_SET_STANDBY,
   LAST_SIGNAL
 };
 
@@ -251,7 +251,7 @@ gst_wfdrtspsrc_send_close_cmd (GstWFDRTSPSrc * src);
 static void
 gst_wfdrtspsrc_set_uibc (GstWFDRTSPSrc * src, gboolean enable);
 static void
-gst_wfdrtspsrc_set_stanby (GstWFDRTSPSrc * src);
+gst_wfdrtspsrc_set_standby (GstWFDRTSPSrc * src);
 
 #ifdef ENABLE_WFD_MESSAGE
 static gint
@@ -428,10 +428,10 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
       G_STRUCT_OFFSET (GstWFDRTSPSrcClass, set_uibc), NULL, NULL,
       g_cclosure_marshal_VOID__BOOLEAN, G_TYPE_NONE, 1, G_TYPE_BOOLEAN);
 
-  gst_wfdrtspsrc_signals[SIGNAL_SET_STANBY] =
-      g_signal_new ("set-stanby", G_TYPE_FROM_CLASS (klass),
+  gst_wfdrtspsrc_signals[SIGNAL_SET_STANDBY] =
+      g_signal_new ("set-standby", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
-      G_STRUCT_OFFSET (GstWFDRTSPSrcClass, set_stanby), NULL, NULL,
+      G_STRUCT_OFFSET (GstWFDRTSPSrcClass, set_standby), NULL, NULL,
       g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
 
   gstelement_class->send_event =
@@ -454,7 +454,7 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
   klass->resume = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_play_cmd);
   klass->close = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_close_cmd);
   klass->set_uibc = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_set_uibc);
-  klass->set_stanby = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_set_stanby);
+  klass->set_standby = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_set_standby);
 }
 
 static GstStructure *
@@ -854,7 +854,7 @@ gst_wfdrtspsrc_send_request (GstWFDRTSPSrc * src)
 
     case WFD_STANDBY:
      /* Note : RTSP M12  :
-      *   Send RTSP SET_PARAMETER with wfd-stanby to indicate that the sender is entering WFD stanby mode.
+      *   Send RTSP SET_PARAMETER with wfd-standby to indicate that the sender is entering WFD standby mode.
       */
       WFDCONFIG_SET_STANDBY(wfd_msg, TRUE, error);
       break;
@@ -1299,18 +1299,40 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
        *   A WFD source shall send an RTSP M1 request to a WFD sink to begin the RTSP procedures and a WFD Capability Negotiation.
        *   A WFD sink shall respond with an RTSP M1 response message which contains an RTSP OPTIONS.
        */
-      res = gst_rtsp_message_init_response (&response, GST_RTSP_STS_OK, gst_rtsp_status_as_text (GST_RTSP_STS_OK), request);
-      if (res < 0)
-        goto send_error;
+      gchar *options_str = NULL;
+      GstRTSPMethod options = 0;
+      gchar *str = NULL;
 
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, (const gchar *)"org.wfa.wfd1.0");
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, gst_rtsp_options_as_text(GST_RTSP_SET_PARAMETER));
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, gst_rtsp_options_as_text(GST_RTSP_GET_PARAMETER));
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, gst_rtsp_options_as_text(GST_RTSP_TEARDOWN));
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, gst_rtsp_options_as_text(GST_RTSP_OPTIONS));
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, gst_rtsp_options_as_text(GST_RTSP_PLAY));
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, gst_rtsp_options_as_text(GST_RTSP_SETUP));
+      options = GST_RTSP_GET_PARAMETER | GST_RTSP_SET_PARAMETER | GST_RTSP_TEARDOWN | GST_RTSP_OPTIONS
+      | GST_RTSP_PLAY | GST_RTSP_PAUSE | GST_RTSP_SETUP;
+
+      str = gst_rtsp_options_as_text (options);
+      if (!str) {
+        GST_ERROR ("Failed to make options string, str is NULL.");
+        res = GST_RTSP_ENOMEM;
+        goto send_error;
+      }
+
+      options_str = g_strconcat ((const gchar*)str, ", org.wfa.wfd1.0", NULL);
+      if (!options_str) {
+       GST_ERROR ("Failed to make options string.");
+       res = GST_RTSP_ENOMEM;
+       g_free(str);
+       goto send_error;
+      }
+      g_free(str);
+      GST_DEBUG_OBJECT (src, "Creating OPTIONS response : %s", options_str);
+
+      res = gst_rtsp_message_init_response (&response, GST_RTSP_STS_OK,
+         gst_rtsp_status_as_text (GST_RTSP_STS_OK), request);
+      if(res < 0) {
+       g_free (options_str);
+       goto send_error;
+      }
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, options_str);
       gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
+      g_free (options_str);
+
       break;
     }
 
@@ -1559,8 +1581,8 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
       }
 
       /* Note : wfd-standby-resume-capability :
-       *   The wfd-standby-resume-capability parameter describes support of both stanby control using
-       *     a wfd-stanby parameter and resume control using PLAY and using triggered-method setting PLAY.
+       *   The wfd-standby-resume-capability parameter describes support of both standby control using
+       *     a wfd-standby parameter and resume control using PLAY and using triggered-method setting PLAY.
        */
       if(wfd_msg->standby_resume_capability) {
         /* TODO */
@@ -1602,7 +1624,7 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
       if (!wfd_msg)
         goto message_config_error;
 
-      /* Note : RTSP M4 :
+     /* Note : RTSP M4 :
        */
       /* Note : wfd-trigger-method :
        *   The wfd-trigger-method parameter is used by a WFD source to trigger the WFD sink to initiate an operation with the WFD source.
@@ -1744,14 +1766,14 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
       /* Note : RTSP M12 :
        */
       /* Note : wfd-standby :
-       *   The wfd-standby parameter is used to indicate that the sender is entering WFD stanby mode.
+       *   The wfd-standby parameter is used to indicate that the sender is entering WFD standby mode.
        */
       if(wfd_msg->standby) {
         gboolean standby_enable = FALSE;
 
         WFDCONFIG_GET_STANDBY(wfd_msg, &standby_enable, message_config_error);
 
-        GST_DEBUG_OBJECT (src, "wfd source is entering stanby mode");
+        GST_DEBUG_OBJECT (src, "wfd source is entering standby mode");
       }
 
       /* Note : RTSP M14 :
@@ -3416,7 +3438,7 @@ gst_wfdrtspsrc_set_uibc (GstWFDRTSPSrc * src, gboolean enable)
 
 
 static void
-gst_wfdrtspsrc_set_stanby (GstWFDRTSPSrc * src)
+gst_wfdrtspsrc_set_standby (GstWFDRTSPSrc * src)
 {
   GST_OBJECT_LOCK(src);
   memset (&src->request_param, 0, sizeof(GstWFDRequestParam));

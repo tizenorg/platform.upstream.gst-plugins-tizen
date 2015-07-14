@@ -186,7 +186,7 @@ struct _GstWFDRTSPSrcClass {
   void     (*resume)   (GstWFDRTSPSrc *src);
   void     (*close)   (GstWFDRTSPSrc *src);
   void     (*set_uibc)   (GstWFDRTSPSrc *src, gboolean enable);
-  void     (*set_stanby)   (GstWFDRTSPSrc *src);
+  void     (*set_standby)   (GstWFDRTSPSrc *src);
 };
 
 GType gst_wfdrtspsrc_get_type(void);
