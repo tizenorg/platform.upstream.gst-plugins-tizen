@@ -14,7 +14,8 @@ libgstwfdtsdemux_la_SOURCES = \
 
 libgstwfdtsdemux_la_CFLAGS = \
 	$(GST_PLUGINS_BASE_CFLAGS) \
-	$(GST_BASE_CFLAGS) $(GST_CFLAGS)
+	$(GST_BASE_CFLAGS) $(GST_CFLAGS) \
+	-DWFD_SPEC
 libgstwfdtsdemux_la_LIBADD = \
 	$(GST_PLUGINS_BASE_LIBS) \
 	-lgsttag-@GST_MAJORMINOR@ \

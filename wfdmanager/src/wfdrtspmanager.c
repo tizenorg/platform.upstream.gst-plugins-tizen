@@ -694,8 +694,9 @@ static gboolean
 wfd_rtsp_manager_configure_udp_sinks ( WFDRTSPManager * manager, GstRTSPTransport * transport)
 {
   GstPad *pad = NULL;
-  gint rtp_port = -1, rtcp_port = -1, sockfd = -1;
-  gboolean do_rtp = FALSE, do_rtcp = FALSE;
+  GSocket *socket = NULL;
+  gint rtp_port = -1, rtcp_port = -1;
+  gboolean do_rtcp = FALSE;
   const gchar *destination =  NULL;
   gchar *uri = NULL;
 
@@ -703,14 +704,12 @@ wfd_rtsp_manager_configure_udp_sinks ( WFDRTSPManager * manager, GstRTSPTranspor
   gst_wfdrtspsrc_get_transport_info (manager, transport, &destination,
       &rtp_port, &rtcp_port);
 
-  /* see what we need to do */
-  do_rtp = (rtp_port != -1);
   /* it's possible that the server does not want us to send RTCP in which case
    * the port is -1 */
   do_rtcp = (rtcp_port != -1 && manager->session != NULL && manager->do_rtcp);
 
-  /* we need a destination when we have RTP or RTCP ports */
-  if (destination == NULL && (do_rtp || do_rtcp))
+  /* we need a destination when we have RTCP port */
+  if (destination == NULL && do_rtcp)
     goto no_destination;
 
   if (do_rtcp) {
@@ -732,12 +731,13 @@ wfd_rtsp_manager_configure_udp_sinks ( WFDRTSPManager * manager, GstRTSPTranspor
       /* configure socket, we give it the same UDP socket as the udpsrc for RTCP
        * because some servers check the port number of where it sends RTCP to identify
        * the RTCP packets it receives */
-      g_object_get (G_OBJECT (manager->udpsrc[1]), "socket", &sockfd, NULL);
-      GST_DEBUG_OBJECT (manager, "RTCP UDP src has sock %d", sockfd);
+      g_object_get (G_OBJECT (manager->udpsrc[1]), "used-socket", &socket, NULL);
+      GST_DEBUG_OBJECT (manager, "RTCP UDP src has sock %p", socket);
       /* configure socket and make sure udpsink does not close it when shutting
        * down, it belongs to udpsrc after all. */
-      g_object_set (G_OBJECT (manager->udpsink[1]), "socket", sockfd,
+      g_object_set (G_OBJECT (manager->udpsink[1]), "socket", socket,
           "close-socket", FALSE, NULL);
+      g_object_unref (socket);
     }
 
     /* we don't want to consider this a sink */
