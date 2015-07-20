@@ -41,8 +41,7 @@
 #include <gst/video/video-format.h>
 #include <xf86drm.h>
 #include <mm_types.h>
-#include "tizen-screenshooter-client-protocol.h"
-#include "tizen-buffer-pool-client-protocol.h"
+#include <tizen-extension-client-protocol.h>
 #include "gstwaylandsrc.h"
 
 GST_DEBUG_CATEGORY_STATIC (waylandsrc_debug);

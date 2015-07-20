@@ -14,7 +14,7 @@ plugin_LTLIBRARIES = libgstwaylandsrc.la
 ##############################################################################
 
 # sources used to compile this plug-in
-libgstwaylandsrc_la_SOURCES = gstwaylandsrc.c tizen-screenshooter-protocol.c tizen-buffer-pool-protocol.c
+libgstwaylandsrc_la_SOURCES = gstwaylandsrc.c
 
 # flags used to compile this plugin
 # add other _CFLAGS and _LIBS as needed
