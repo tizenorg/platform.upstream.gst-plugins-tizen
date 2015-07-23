@@ -104,8 +104,6 @@ struct _WFDRTSPManager {
 
   /* our udp sinks back to the server */
   GstElement   *udpsink[2];
-  GstPad       *rtcppad;
-
 
   /* original control url */
   GstRTSPConnection *control_connection;
@@ -150,6 +148,9 @@ void
 wfd_rtsp_manager_enable_pad_probe(WFDRTSPManager * manager);
 void
 wfd_rtsp_manager_flush (WFDRTSPManager * manager, gboolean flush);
+void
+wfd_rtsp_manager_set_state (WFDRTSPManager * manager, GstState state);
+
 G_END_DECLS
 
 #endif /* __GST_WFD_RTSP_MANAGER_H__ */

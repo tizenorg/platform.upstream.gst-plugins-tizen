@@ -764,7 +764,6 @@ gst_wfdrtspsrc_cleanup (GstWFDRTSPSrc * src)
   GST_DEBUG_OBJECT (src, "cleanup");
 }
 
-
 static GstRTSPResult
 gst_wfdrtspsrc_connection_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
     GstRTSPMessage * message, GTimeVal * timeout)
@@ -1595,7 +1594,7 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
       rtsp_body_length_str = g_string_new ("");
       g_string_append_printf (rtsp_body_length_str,"%d", rtsp_body_length);
 
-      //gst_rtsp_message_add_header (&request, GST_RTSP_HDR_CONTENT_LENGTH, g_string_free (rtsp_body_length_str, FALSE));
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_CONTENT_LENGTH, g_string_free (rtsp_body_length_str, FALSE));
 
       res = gst_rtsp_message_set_body (&response, (guint8*)rtsp_body, rtsp_body_length);
       if (res < 0)
@@ -2830,6 +2829,10 @@ gst_wfdrtspsrc_close (GstWFDRTSPSrc * src, gboolean only_close)
 
   GST_DEBUG_OBJECT (src, "TEARDOWN...");
 
+  manager = src->manager;
+
+  wfd_rtsp_manager_set_state (manager, GST_STATE_READY);
+
   if (src->state < GST_RTSP_STATE_READY) {
     GST_DEBUG_OBJECT (src, "not ready, doing cleanup");
     goto close;
@@ -2843,8 +2846,6 @@ gst_wfdrtspsrc_close (GstWFDRTSPSrc * src, gboolean only_close)
 
   if (!(src->methods & (GST_RTSP_PLAY | GST_RTSP_TEARDOWN)))
     goto not_supported;
-
-  manager = src->manager;
 
   /* do TEARDOWN */
   res =
@@ -2984,7 +2985,6 @@ gst_wfdrtspsrc_send_play_cmd (GstWFDRTSPSrc * src)
   gst_wfdrtspsrc_loop_send_cmd (src, CMD_PLAY);
 }
 
-
 /* Note : RTSP M7 :
  *   Send PLAY request to WFD source. WFD source begins audio and/or video streaming.
  */
@@ -3007,8 +3007,6 @@ gst_wfdrtspsrc_play (GstWFDRTSPSrc * src)
 
   if (src->state == GST_RTSP_STATE_PLAYING)
     goto was_playing;
-
-  gst_element_set_state (GST_ELEMENT_CAST (src), GST_STATE_PLAYING);
 
   /* do play */
   res = gst_rtsp_message_init_request (&request, GST_RTSP_PLAY, src->conninfo.url_str);
@@ -3034,6 +3032,11 @@ gst_wfdrtspsrc_play (GstWFDRTSPSrc * src)
 
   /* configure the caps of the streams after we parsed all headers. */
   gst_wfdrtspsrc_configure_caps (src);
+
+  /* set to PLAYING after we have configured the caps, otherwise we
+   * might end up calling request_key (with SRTP) while caps are still
+   * being configured. */
+  wfd_rtsp_manager_set_state (src->manager, GST_STATE_PLAYING);
 
   src->state = GST_RTSP_STATE_PLAYING;
 
@@ -3105,6 +3108,8 @@ gst_wfdrtspsrc_pause (GstWFDRTSPSrc * src)
 
   gst_rtsp_message_unset (&request);
   gst_rtsp_message_unset (&response);
+
+  wfd_rtsp_manager_set_state (src->manager, GST_STATE_PAUSED);
 
 no_connection:
   src->state = GST_RTSP_STATE_READY;
