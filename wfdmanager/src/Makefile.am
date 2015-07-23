@@ -1,9 +1,8 @@
 plugin_LTLIBRARIES = libgstwfdmanager.la
 
 libgstwfdmanager_la_SOURCES = gstwfdmanager.c \
-			gstwfdrtspsrc.c
-
-libgstwfdmanager_la_SOURCES += wfdrtspmanager.c \
+			gstwfdrtspsrc.c \
+			wfdrtspmanager.c \
 			wfdrtpbuffer/wfdrtpbuffer.c \
 			wfdrtpbuffer/gstwfdrtpbuffer.c \
 			wfdrtpbuffer/rtpstats.c
@@ -17,9 +16,8 @@ libgstwfdmanager_la_LIBADD = $(GST_LIBS) $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIB
 libgstwfdmanager_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
 libgstwfdmanager_la_LIBTOOLFLAGS = --tag=disable-static
 
-noinst_HEADERS = gstwfdrtspsrc.h
-
-noinst_HEADERS += wfdrtspmanager.h \
+noinst_HEADERS = gstwfdrtspsrc.h \
 		wfdrtpbuffer/wfdrtpbuffer.h \
 		wfdrtpbuffer/gstwfdrtpbuffer.h \
-		wfdrtpbuffer/rtpstats.h
+		wfdrtpbuffer/rtpstats.h \
+		wfdrtspmanager.h

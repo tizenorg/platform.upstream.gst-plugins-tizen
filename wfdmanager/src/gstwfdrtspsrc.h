@@ -167,7 +167,6 @@ struct _GstWFDRTSPSrc {
   guint audio_bitwidth;
   guint audio_frequency;
 
-  gboolean is_paused;
 #ifdef ENABLE_WFD_MESSAGE
   void *message_handle;
   gboolean extended_wfd_message_support;
