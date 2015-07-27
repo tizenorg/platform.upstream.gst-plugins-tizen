@@ -27,6 +27,26 @@
 
 G_BEGIN_DECLS
 
+#define STRING_WFD_AUDIO_CODECS               "wfd_audio_codecs"
+#define STRING_WFD_VIDEO_FORMATS              "wfd_video_formats"
+#define STRING_WFD_3D_VIDEO_FORMATS           "wfd_3d_video_formats"
+#define STRING_WFD_CONTENT_PROTECTION         "wfd_content_protection"
+#define STRING_WFD_DISPLAY_EDID               "wfd_display_edid"
+#define STRING_WFD_COUPLED_SINK               "wfd_coupled_sink"
+#define STRING_WFD_TRIGGER_METHOD             "wfd_trigger_method"
+#define STRING_WFD_PRESENTATION_URL           "wfd_presentation_URL"
+#define STRING_WFD_CLIENT_RTP_PORTS           "wfd_client_rtp_ports"
+#define STRING_WFD_ROUTE                      "wfd_route"
+#define STRING_WFD_I2C                        "wfd_I2C"
+#define STRING_WFD_AV_FORMAT_CHANGE_TIMING    "wfd_av_format_change_timing"
+#define STRING_WFD_PREFERRED_DISPLAY_MODE     "wfd_preferred_display_mode"
+#define STRING_WFD_UIBC_CAPABILITY            "wfd_uibc_capability"
+#define STRING_WFD_UIBC_SETTING               "wfd_uibc_setting"
+#define STRING_WFD_STANDBY_RESUME_CAPABILITY  "wfd_standby_resume_capability"
+#define STRING_WFD_STANDBY                    "wfd_standby"
+#define STRING_WFD_CONNECTOR_TYPE             "wfd_connector_type"
+#define STRING_WFD_IDR_REQUEST                "wfd_idr_request"
+
 /**
  * WFDResult:
  * @WFD_OK: A successful return value
