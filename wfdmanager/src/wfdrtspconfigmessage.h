@@ -46,6 +46,57 @@ G_BEGIN_DECLS
 #define STRING_WFD_STANDBY                    "wfd_standby"
 #define STRING_WFD_CONNECTOR_TYPE             "wfd_connector_type"
 #define STRING_WFD_IDR_REQUEST                "wfd_idr_request"
+#define STRING_WFD_NONE                       "none"
+#define STRING_WFD_ENABLE                     "enable"
+#define STRING_WFD_DISABLE                    "disable"
+#define STRING_WFD_CRLF                       "\r\n"
+#define STRING_WFD_SPACE                      " "
+#define STRING_WFD_INPUT_CATEGORY_LIST        "input_category_list"
+#define STRING_WFD_GENERIC                    "GENERIC"
+#define STRING_WFD_HIDC                       "HIDC"
+#define STRING_WFD_GENERIC_CAP_LIST           "generic_cap_list"
+#define STRING_WFD_KEYBOARD                   "Keyboard"
+#define STRING_WFD_MOUSE                      "Mouse"
+#define STRING_WFD_SINGLE_TOUCH               "SingleTouch"
+#define STRING_WFD_MULTI_TOUCH                "MultiTouch"
+#define STRING_WFD_JOYSTICK                   "Joystick"
+#define STRING_WFD_CAMERA                     "Camera"
+#define STRING_WFD_GESTURE                    "Gesture"
+#define STRING_WFD_REMOTE_CONTROL             "RemoteControl"
+#define STRING_WFD_HIDC_CAP_LIST              "hidc_cap_list"
+#define STRING_WFD_INFRARED                   "Infrared"
+#define STRING_WFD_USB                        "USB"
+#define STRING_WFD_BT                         "BT"
+#define STRING_WFD_ZIGBEE                     "Zigbee"
+#define STRING_WFD_WIFI                       "Wi-Fi"
+#define STRING_WFD_NO_SP                      "No-SP"
+#define STRING_WFD_PORT                       "port"
+#define STRING_WFD_SUPPORTED                  "supported"
+#define STRING_WFD_LPCM                       "LPCM"
+#define STRING_WFD_AAC                        "AAC"
+#define STRING_WFD_AC3                        "AC3"
+#define STRING_WFD_HDCP2_0                    "HDCP2.0"
+#define STRING_WFD_HDCP2_1                    "HDCP2.1"
+#define STRING_WFD_SETUP                      "SETUP"
+#define STRING_WFD_PAUSE                      "PAUSE"
+#define STRING_WFD_TEARDOWN                   "TEARDOWN"
+#define STRING_WFD_PLAY                       "PLAY"
+#define STRING_WFD_RTP                        "RTP"
+#define STRING_WFD_RDT                        "RDT"
+#define STRING_WFD_AVP                        "AVP"
+#define STRING_WFD_SAVP                       "SAVP"
+#define STRING_WFD_UDP                        "UDP"
+#define STRING_WFD_TCP                        "TCP"
+#define STRING_WFD_UNICAST                    "unicast"
+#define STRING_WFD_MULTICAST                  "multicast"
+#define STRING_WFD_TCP_HTTP                   "HTTP"
+#define STRING_WFD_PRIMARY                    "primary"
+#define STRING_WFD_SECONDARY                  "secondary"
+#define STRING_WFD_COMMA                      ","
+#define STRING_WFD_EQUALS                     "="
+#define STRING_WFD_COLON                      ":"
+#define STRING_WFD_SEMI_COLON                 ";"
+#define STRING_WFD_SLASH                      "/"
 
 /**
  * WFDResult:
@@ -316,7 +367,7 @@ typedef struct {
 } WFDVideoCodeclist;
 
 typedef struct {
-  guint video_3d_capability;
+  guint64 video_3d_capability;
   guint latency;
   guint min_slice_size;
   guint slice_enc_params;
