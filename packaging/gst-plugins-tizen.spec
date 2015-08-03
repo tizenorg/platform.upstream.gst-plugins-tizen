@@ -4,10 +4,10 @@
 Name:       gst-plugins-tizen
 Version:    1.0.0
 Summary:    GStreamer tizen plugins (common)
-Release:    8
+Release:    9
 Group:      Multimedia/Framework
 Url:        http://gstreamer.freedesktop.org/
-License:    LGPL-2.0+
+License:    LGPL-2.1+ and Apache-2.0
 Source0:    %{name}-%{version}.tar.gz
 
 #BuildRequires:  pkgconfig(camsrcjpegenc)
@@ -62,10 +62,13 @@ make %{?jobs:-j%jobs}
 %install
 rm -rf %{buildroot}
 %make_install
+mkdir -p %{buildroot}/%{_datadir}/license
+cp -rf %{_builddir}/%{name}-%{version}/COPYING %{buildroot}%{_datadir}/license/%{name}
+
 
 
 %files
 %manifest gst-plugins-tizen1.0.manifest
 %defattr(-,root,root,-)  
 %{_libdir}/gstreamer-%{gst_branch}/*.so
-
+%{_datadir}/license/%{name}
