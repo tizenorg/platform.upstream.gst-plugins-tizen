@@ -324,6 +324,10 @@ typedef enum {
   WFD_CONNECTOR_PHYSICAL     = 255
 }WFDConnector;
 
+typedef enum {
+  WFD_PREFERRED_DISPLAY_MODE_NOT_SUPPORTED = 0,
+  WFD_PREFERRED_DISPLAY_MODE_SUPPORTED = 1
+} WFDPreferredDisplayModeEnum;
 
 typedef struct {
   gchar	*audio_format;
@@ -573,7 +577,8 @@ WFDResult wfdconfig_set_supported_video_format(WFDMessage *msg, WFDVideoCodecs v
 												WFDVideoNativeResolution vNative, guint64 vNativeResolution,
 												guint64 vCEAResolution, guint64 vVESAResolution, guint64 vHHResolution,
 												guint vProfile, guint vLevel, guint32 vLatency, guint32 vMaxHeight,
-												guint32 vMaxWidth, guint32 min_slice_size, guint32 slice_enc_params, guint frame_rate_control);
+												guint32 vMaxWidth, guint32 min_slice_size, guint32 slice_enc_params, guint frame_rate_control,
+												guint preferred_display_mode);
 WFDResult wfdconfig_set_prefered_video_format(WFDMessage *msg, WFDVideoCodecs vCodec,
 												WFDVideoNativeResolution vNative, guint64 vNativeResolution,
 												WFDVideoCEAResolution vCEAResolution, WFDVideoVESAResolution vVESAResolution,

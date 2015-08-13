@@ -1474,6 +1474,7 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
             video_minimum_slicing,
             video_slice_enc_param,
             video_framerate_control_support,
+            WFD_PREFERRED_DISPLAY_MODE_NOT_SUPPORTED,
             message_config_error);
       }
 
@@ -1514,7 +1515,11 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
        */
       if(wfd_msg->display_edid) {
         /* TODO: Set preferred display_edid */
-        wfd_res = WFD_OK;
+        WFDCONFIG_SET_DISPLAY_EDID(wfd_msg,
+		      FALSE,
+		      0,
+		      NULL,
+		      message_config_error);
       }
 
       /* Note : wfd-coupled-sink :

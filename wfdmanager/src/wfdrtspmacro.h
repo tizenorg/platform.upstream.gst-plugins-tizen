@@ -50,6 +50,8 @@
 #define WFD_MESSAGE_GET_PREFERED_VIDEO_FORMAT "wfdconfig_get_prefered_video_format"
 #define WFD_MESSAGE_GET_TRIGGER_TYPE "wfdconfig_get_trigger_type"
 #define WFD_MESSAGE_GET_AV_FORMAT_CHANGE_TIMING "wfdconfig_get_av_format_change_timing"
+#define WFD_MESSAGE_SET_DISPLAY_EDID "wfdconfig_set_display_EDID"
+#define WFD_MESSAGE_GET_DISPLAY_EDID "wfdconfig_get_display_EDID"
 
 #define WFDCONFIG_MESSAGE_NEW(msg, label)\
 G_STMT_START { \
@@ -232,14 +234,15 @@ G_STMT_START { \
 
 #define WFDCONFIG_SET_SUPPORTED_VIDEO_FORMAT(msg, video_codec, video_native, video_native_resolution, video_cea_support,\
   video_vesa_support, video_hh_support, video_profile, video_level, video_latency, video_vertical_resolution,\
-  video_horizontal_resolution, video_minimum_slicing, video_slice_enc_param, video_framerate_control_support, label)\
+  video_horizontal_resolution, video_minimum_slicing, video_slice_enc_param, video_framerate_control_support,\
+  video_preferred_display_mode, label)\
 G_STMT_START { \
   if (src->extended_wfd_message_support){\
     WFDResult (*func)(WFDMessage *, WFDVideoCodecs ,\
                   WFDVideoNativeResolution , guint64 ,\
                   guint64 , guint64 , guint64 ,\
                   guint , guint , guint32 , guint32 ,\
-                  guint32 , guint32 , guint32 , guint ) = __wfd_config_message_func(src, WFD_MESSAGE_SET_SUPPORTED_VIDEO_FORMAT);\
+                  guint32 , guint32 , guint32 , guint, guint) = __wfd_config_message_func(src, WFD_MESSAGE_SET_SUPPORTED_VIDEO_FORMAT);\
     if(func == NULL) {\
       wfd_res = WFD_NOT_IMPLEMENTED;\
       goto label;\
@@ -258,7 +261,8 @@ G_STMT_START { \
           video_horizontal_resolution,\
           video_minimum_slicing,\
           video_slice_enc_param,\
-          video_framerate_control_support);\
+          video_framerate_control_support,\
+          video_preferred_display_mode);\
     if (G_UNLIKELY (wfd_res != WFD_OK)) \
       goto label; \
   }\
@@ -439,11 +443,38 @@ G_STMT_START { \
   }\
 } G_STMT_END
 
+#define WFDCONFIG_SET_DISPLAY_EDID(msg, edid_supported, edid_blockcount, edid_payload, label)\
+G_STMT_START { \
+  if (src->extended_wfd_message_support){\
+	WFDResult (*func)(WFDMessage *, gboolean, guint32, gchar *) = __wfd_config_message_func(src, WFD_MESSAGE_SET_DISPLAY_EDID);\
+	if(func == NULL) {\
+	  wfd_res = WFD_NOT_IMPLEMENTED;\
+	  goto label;\
+	}\
+	wfd_res = func(msg, edid_supported, edid_blockcount, edid_payload);\
+	if (G_UNLIKELY (wfd_res != WFD_OK)) \
+	  goto label; \
+  }\
+} G_STMT_END
+
+#define WFDCONFIG_GET_DISPLAY_EDID(msg, edid_supported, edid_blockcount, edid_payload, label)\
+G_STMT_START { \
+  if (src->extended_wfd_message_support){\
+	WFDResult (*func)(WFDMessage *, gboolean *, guint32 *, gchar **) = __wfd_config_message_func(src, WFD_MESSAGE_GET_DISPLAY_EDID);\
+	if(func == NULL) {\
+	  wfd_res = WFD_NOT_IMPLEMENTED;\
+	  goto label;\
+	}\
+	wfd_res = func(msg, edid_supported, edid_blockcount, edid_payload);\
+	if (G_UNLIKELY (wfd_res != WFD_OK)) \
+	  goto label; \
+  }\
+} G_STMT_END
+
 #define WFDCONFIG_MESSAGE_CHECK(stmt, label)  \
 G_STMT_START { \
   if (G_UNLIKELY ((wfd_res = (stmt)) != WFD_OK)) \
     goto label; \
 } G_STMT_END
-
 
 #endif /*__WFD_RTSP_MACRO_H__*/
