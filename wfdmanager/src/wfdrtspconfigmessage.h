@@ -40,8 +40,6 @@ G_BEGIN_DECLS
 #define STRING_WFD_I2C                        "wfd_I2C"
 #define STRING_WFD_AV_FORMAT_CHANGE_TIMING    "wfd_av_format_change_timing"
 #define STRING_WFD_PREFERRED_DISPLAY_MODE     "wfd_preferred_display_mode"
-#define STRING_WFD_UIBC_CAPABILITY            "wfd_uibc_capability"
-#define STRING_WFD_UIBC_SETTING               "wfd_uibc_setting"
 #define STRING_WFD_STANDBY_RESUME_CAPABILITY  "wfd_standby_resume_capability"
 #define STRING_WFD_STANDBY                    "wfd_standby"
 #define STRING_WFD_CONNECTOR_TYPE             "wfd_connector_type"
@@ -279,34 +277,6 @@ typedef enum {
 }WFDSinkType;
 
 typedef enum {
-  WFD_UIBC_INPUT_CAT_UNKNOWN   = 0,
-  WFD_UIBC_INPUT_CAT_GENERIC   = (1 << 0),
-  WFD_UIBC_INPUT_CAT_HIDC      = (1 << 1),
-}WFDUibcinput_cat;
-
-typedef enum {
-  WFD_UIBC_INPUT_TYPE_UNKNOWN        = 0,
-  WFD_UIBC_INPUT_TYPE_KEYBOARD       = (1 << 0),
-  WFD_UIBC_INPUT_TYPE_MOUSE          = (1 << 1),
-  WFD_UIBC_INPUT_TYPE_SINGLETOUCH    = (1 << 2),
-  WFD_UIBC_INPUT_TYPE_MULTITOUCH     = (1 << 3),
-  WFD_UIBC_INPUT_TYPE_JOYSTICK       = (1 << 4),
-  WFD_UIBC_INPUT_TYPE_CAMERA         = (1 << 5),
-  WFD_UIBC_INPUT_TYPE_GESTURE        = (1 << 6),
-  WFD_UIBC_INPUT_TYPE_REMOTECONTROL  = (1 << 7)
-}WFDUibcinp_type;
-
-typedef enum {
-  WFD_UIBC_INPUT_PATH_UNKNOWN   = 0,
-  WFD_UIBC_INPUT_PATH_INFRARED  = (1 << 0),
-  WFD_UIBC_INPUT_PATH_USB       = (1 << 1),
-  WFD_UIBC_INPUT_PATH_BT        = (1 << 2),
-  WFD_UIBC_INPUT_PATH_ZIGBEE    = (1 << 3),
-  WFD_UIBC_INPUT_PATH_WIFI      = (1 << 4),
-  WFD_UIBC_INPUT_PATH_NOSP      = (1 << 5)
-}WFDUibcinp_path;
-
-typedef enum {
   WFD_CONNECTOR_VGA           = 0,
   WFD_CONNECTOR_S,
   WFD_CONNECTOR_COMPOSITE,
@@ -471,43 +441,6 @@ typedef struct {
 } WFDPreferredDisplayMode;
 
 typedef struct {
-  guint32 input_cat;
-}WFDInputCategoryList;
-
-typedef struct {
-  guint32 inp_type;
-}WFDGenericCategoryList;
-
-typedef struct _detailed_cap detailed_cap;
-
-typedef struct {
-  WFDUibcinp_type inp_type;
-  WFDUibcinp_path inp_path;
-}WFDHIDCTypePathPair;
-
-struct _detailed_cap {
-  WFDHIDCTypePathPair p;
-  detailed_cap *next;
-};
-
-typedef struct {
-  guint cap_count;
-  detailed_cap *next;
-}WFDHIDCCategoryList;
-
-typedef struct {
-  gboolean uibcsupported;
-  WFDInputCategoryList input_category_list;
-  WFDGenericCategoryList generic_cap_list;
-  WFDHIDCCategoryList hidc_cap_list;
-  guint32 tcp_port;
-} WFDUibcCapability;
-
-typedef struct {
-  gboolean uibc_setting;
-} WFDUibcSetting;
-
-typedef struct {
   gboolean standby_resume_cap;
 } WFDStandbyResumeCapability;
 
@@ -541,8 +474,6 @@ typedef struct {
   WFDI2C *I2C;
   WFDAVFormatChangeTiming *av_format_change_timing;
   WFDPreferredDisplayMode *preferred_display_mode;
-  WFDUibcCapability *uibc_capability;
-  WFDUibcSetting *uibc_setting;
   WFDStandbyResumeCapability *standby_resume_capability;
   WFDStandby *standby;
   WFDConnectorType *connector_type;
@@ -630,14 +561,6 @@ WFDResult wfdconfig_set_av_format_change_timing(WFDMessage *msg, guint64 PTS, gu
 WFDResult wfdconfig_get_av_format_change_timing(WFDMessage *msg, guint64 *PTS, guint64 *DTS);
 
 // Todo wfd-preferred-display-mode
-
-WFDResult wfdconfig_set_uibc_capability(WFDMessage *msg, guint32 input_category, guint32 inp_type, WFDHIDCTypePathPair *inp_pair,
-												guint32 inp_type_path_count, guint32 tcp_port);
-WFDResult wfdconfig_get_uibc_capability(WFDMessage *msg, guint32 *input_category, guint32 *inp_type, WFDHIDCTypePathPair **inp_pair,
-												guint32 *inp_type_path_count, guint32 *tcp_port);
-
-WFDResult wfdconfig_set_uibc_status(WFDMessage *msg, gboolean uibc_enable);
-WFDResult wfdconfig_get_uibc_status(WFDMessage *msg, gboolean *uibc_enable);
 
 WFDResult wfdconfig_set_standby_resume_capability(WFDMessage *msg, gboolean supported);
 WFDResult wfdconfig_get_standby_resume_capability(WFDMessage *msg, gboolean *supported);

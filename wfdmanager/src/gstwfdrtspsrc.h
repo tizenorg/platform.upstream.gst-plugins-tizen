@@ -94,8 +94,6 @@ typedef enum
   WFD_CONNECTOR_TYPE,
   WFD_STANDBY,
   WFD_IDR_REQUEST,
-  WFD_UIBC_CAPABILITY,
-  WFD_UIBC_SETTING,
   WFD_SINK_STATUS
 } GstWFDParam;
 
@@ -109,16 +107,6 @@ typedef struct {
     struct {
       WFDConnector type;
     }connector_setting;
-    struct {
-      WFDUibcinput_cat input_category;
-      WFDUibcinp_type input_type;
-      WFDHIDCTypePathPair *input_pair;
-      guint32 inp_type_path_count;
-      guint32 tcp_port;
-    }uibc_capability;
-    struct {
-      gboolean enable;
-    }uibc_setting;
   };
 }GstWFDRequestParam;
 
@@ -184,7 +172,6 @@ struct _GstWFDRTSPSrcClass {
   void     (*pause)   (GstWFDRTSPSrc *src);
   void     (*resume)   (GstWFDRTSPSrc *src);
   void     (*close)   (GstWFDRTSPSrc *src);
-  void     (*set_uibc)   (GstWFDRTSPSrc *src, gboolean enable);
   void     (*set_standby)   (GstWFDRTSPSrc *src);
 };
 

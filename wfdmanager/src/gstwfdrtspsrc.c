@@ -115,7 +115,6 @@ enum
   SIGNAL_PAUSE,
   SIGNAL_RESUME,
   SIGNAL_CLOSE,
-  SIGNAL_SET_UIBC,
   SIGNAL_SET_STANDBY,
   LAST_SIGNAL
 };
@@ -248,8 +247,6 @@ static void
 gst_wfdrtspsrc_send_play_cmd (GstWFDRTSPSrc * src);
 static void
 gst_wfdrtspsrc_send_close_cmd (GstWFDRTSPSrc * src);
-static void
-gst_wfdrtspsrc_set_uibc (GstWFDRTSPSrc * src, gboolean enable);
 static void
 gst_wfdrtspsrc_set_standby (GstWFDRTSPSrc * src);
 
@@ -422,12 +419,6 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
       G_STRUCT_OFFSET (GstWFDRTSPSrcClass, close), NULL, NULL,
       g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
 
-  gst_wfdrtspsrc_signals[SIGNAL_SET_UIBC] =
-      g_signal_new ("set-uibc", G_TYPE_FROM_CLASS (klass),
-      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
-      G_STRUCT_OFFSET (GstWFDRTSPSrcClass, set_uibc), NULL, NULL,
-      g_cclosure_marshal_VOID__BOOLEAN, G_TYPE_NONE, 1, G_TYPE_BOOLEAN);
-
   gst_wfdrtspsrc_signals[SIGNAL_SET_STANDBY] =
       g_signal_new ("set-standby", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
@@ -453,7 +444,6 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
   klass->pause = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_pause_cmd);
   klass->resume = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_play_cmd);
   klass->close = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_close_cmd);
-  klass->set_uibc = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_set_uibc);
   klass->set_standby = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_set_standby);
 }
 
@@ -863,25 +853,6 @@ gst_wfdrtspsrc_send_request (GstWFDRTSPSrc * src)
       *   Send RTSP SET_PARAMETER with wfd-idr-request to request IDR refresh.
       */
       WFDCONFIG_SET_IDR_REQUEST(wfd_msg, error);
-      break;
-
-    case WFD_UIBC_CAPABILITY:
-     /* Note : RTSP M14  :
-      *   Send RTSP SET_PARAMETER with wfd-uibc-capability to select UIBC to be used.
-      */
-      WFDCONFIG_SET_UIBC_CAPABILITY(wfd_msg, request_param.uibc_capability.input_category,
-        request_param.uibc_capability.input_type,
-        request_param.uibc_capability.input_pair,
-        request_param.uibc_capability.inp_type_path_count,
-        request_param.uibc_capability.tcp_port,
-        error);
-      break;
-
-    case WFD_UIBC_SETTING:
-     /* Note : RTSP M15 :
-      *   Send RTSP SET_PARAMETER with wfd-uibc-setting to enable or disable the UIBC.
-      */
-      WFDCONFIG_SET_UIBC_STATUS(wfd_msg, request_param.uibc_setting.enable, error);
       break;
 
     default:
@@ -1563,16 +1534,6 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
         wfd_res = WFD_OK;
       }
 
-      /* Note : wfd-uibc-capability :
-       *   The wfd-I2C parameter describes support for the use input back channel and related attributes.
-       *   The WFD source indicates the TCP port number to be used for UIBC in the tcp-port filed in RTSP M4 and/or M14 request messages.
-       *   The WFD sink uses "none" for the tcp-port filed of the wfd-uibc-capability paramter, in RTSP M3 response and M14 request message.
-       */
-      if(wfd_msg->uibc_capability) {
-        /* TODO */
-        wfd_res = WFD_OK;
-      }
-
       /* Note : wfd-connector-type :
        *   The WFD source may send wfd-connector-type parameter to inquire about the connector type that is currently active in the WFD sink.
        *   The WFD sink shall not send wfd-connector-type parameter unless the WFD source support this parameter.
@@ -1779,37 +1740,6 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
 
         GST_DEBUG_OBJECT (src, "wfd source is entering standby mode");
       }
-
-      /* Note : RTSP M14 :
-       */
-      /* Note : wfd-uibc-capability :
-       *   The wfd-uibc-capability parameter describes support for the use input back channel and related attributes.
-       *   The WFD source indicates the TCP port number to be used for UIBC in the tcp-port filed in RTSP M4 and/or M14 request messages.
-       *   The WFD sink uses "none" for the tcp-port filed of the wfd-uibc-capability paramter, in RTSP M3 response and M14 request message.
-       */
-      if(wfd_msg->uibc_capability) {
-        guint32 input_category = 0, input_type = 0, input_type_path_count = 0;
-        WFDHIDCTypePathPair *input_pair =  NULL;
-        guint32 tcp_port = 0;
-
-        WFDCONFIG_GET_UIBC_CAPABILITY(wfd_msg, &input_category, &input_type,& input_pair, &input_type_path_count, &tcp_port, message_config_error);
-      }
-
-      /* Note : RTSP M15 :
-       */
-      /* Note : wfd-uibc-setting :
-       *   The wfd-setting parameter is used to enable and disable the UIBC.
-       *   The wfd-setting parameter may be included in the first RTSP M4 request meesage during the WFD capability negotiation,
-       *     provided that the RTSP M4 request message contains the wfd-uibc-capability parameter.
-       */
-      if(wfd_msg->uibc_setting) {
-        gboolean uibc_enable = TRUE;
-
-        WFDCONFIG_GET_UIBC_STATUS(wfd_msg, &uibc_enable, message_config_error);
-
-        GST_DEBUG_OBJECT ("UIBC is %s", uibc_enable? "enabled" : "disabled");
-      }
-
       break;
     }
 
@@ -3433,19 +3363,6 @@ gst_wfdrtspsrc_send_event (GstElement * element, GstEvent * event)
 
   return res;
 }
-
-static void
-gst_wfdrtspsrc_set_uibc (GstWFDRTSPSrc * src, gboolean enable)
-{
-  GST_OBJECT_LOCK(src);
-  memset (&src->request_param, 0, sizeof(GstWFDRequestParam));
-  src->request_param.type = WFD_UIBC_SETTING;
-  src->request_param.uibc_setting.enable = enable;
-  GST_OBJECT_UNLOCK(src);
-
-  gst_wfdrtspsrc_loop_send_cmd(src, CMD_REQUEST);
-}
-
 
 static void
 gst_wfdrtspsrc_set_standby (GstWFDRTSPSrc * src)
