@@ -483,89 +483,15 @@ was_ok:
   return;
 }
 
-
 static gboolean
-wfd_rtsp_manager_configure_udp (WFDRTSPManager *manager, gint rtpport, gint rtcpport)
+wfd_rtsp_manager_configure_udp (WFDRTSPManager *manager)
 {
-  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
-  GstElement *udpsrc0 = NULL, *udpsrc1 = NULL;
-  gint tmp_rtp = 0, tmp_rtcp = 0;
-  const gchar *host;
-  GstCaps *caps;
   GstPad *outpad = NULL;
 
-  if (manager->is_ipv6)
-    host = "udp://[::0]";
-  else
-    host = "udp://0.0.0.0";
-
-  udpsrc0 = gst_element_make_from_uri (GST_URI_SRC, host, NULL, NULL);
-  if (udpsrc0 == NULL)
-    goto no_udp_protocol;
-
-  g_object_set (G_OBJECT (udpsrc0), "port", rtpport, "reuse", FALSE, NULL);
-
-  if (manager->udp_buffer_size != 0) {
-    g_object_set (G_OBJECT (udpsrc0), "buffer-size", manager->udp_buffer_size,
-        NULL);
-    g_object_set (G_OBJECT (udpsrc0), "blocksize", manager->udp_buffer_size,
-        NULL);
-  }
-
-  caps = gst_caps_new_simple ("application/x-rtp",
-                    "media", G_TYPE_STRING, "video", "payload", G_TYPE_INT, 33,
-                    "clock-rate", G_TYPE_INT, 90000, "encoding-params", G_TYPE_STRING, "MP2T-ES", NULL);
-
-  g_object_set (udpsrc0, "caps", caps, NULL);
-  gst_caps_unref (caps);
-
-  ret = gst_element_set_state (udpsrc0, GST_STATE_PAUSED);
-  if (ret == GST_STATE_CHANGE_FAILURE)  {
-    GST_DEBUG_OBJECT (manager, "fail to change state udpsrc for RTP");
-    goto no_udp_protocol;
-  }
-
-  g_object_get (G_OBJECT (udpsrc0), "port", &tmp_rtp, NULL);
-  GST_DEBUG_OBJECT (manager, "got RTP port %d", tmp_rtp);
-
-  /* check if port is even */
-  if ((tmp_rtp & 0x01) != 0) {
-    GST_DEBUG_OBJECT (rtpport, "RTP port not even");
-    goto no_ports;
-  }
-
-  /* allocate port+1 for RTCP now */
-  udpsrc1 = gst_element_make_from_uri (GST_URI_SRC, host, NULL, NULL);
-  if (udpsrc1 == NULL)
-    goto no_udp_rtcp_protocol;
-
-  g_object_set (G_OBJECT (udpsrc1), "port", rtcpport, "reuse", FALSE, NULL);
-
-  GST_DEBUG_OBJECT (manager, "starting RTCP on port %d", rtcpport);
-  ret = gst_element_set_state (udpsrc1, GST_STATE_PAUSED);
-  if (ret == GST_STATE_CHANGE_FAILURE) {
-    GST_DEBUG_OBJECT (manager, "fail to change state udpsrc for RTCP");
-    goto no_udp_rtcp_protocol;
-  }
-
-  /* all fine, do port check */
-  g_object_get (G_OBJECT (udpsrc0), "port", &tmp_rtp, NULL);
-  g_object_get (G_OBJECT (udpsrc1), "port", &tmp_rtcp, NULL);
-
-  /* this should not happen... */
-  if (rtpport != tmp_rtp || rtcpport != tmp_rtcp)
-    goto port_error;
-
-  /* we keep these elements, we configure all in configure_transport when the
-   * server told us to really use the UDP ports. */
-  manager->udpsrc[0] = gst_object_ref (udpsrc0);
-  manager->udpsrc[1] = gst_object_ref (udpsrc1);
-
-  /* they are ours now */
-  gst_object_ref_sink (udpsrc0);
-  gst_object_ref_sink (udpsrc1);
-
+  /* we manage the UDP elements now. For unicast, the UDP sources where
+   * allocated in the stream when we suggested a transport. */
   if (manager->udpsrc[0]) {
+    GstCaps *caps;
 
     gst_element_set_locked_state (manager->udpsrc[0], TRUE);
     gst_bin_add (GST_BIN_CAST (manager->wfdrtspsrc), manager->udpsrc[0]);
@@ -573,14 +499,16 @@ wfd_rtsp_manager_configure_udp (WFDRTSPManager *manager, gint rtpport, gint rtcp
     GST_DEBUG_OBJECT (manager, "setting up UDP source");
 
     /* configure a timeout on the UDP port. When the timeout message is
-     * posted, we assume UDP transport is not possible. We reconnect using TCP
-     * if we can. */
-    g_object_set (G_OBJECT (manager->udpsrc[0]), "timeout", manager->udp_timeout,
-        NULL);
-    g_object_set (G_OBJECT (manager->udpsrc[0]), "do-timestamp", FALSE, NULL);
-    g_object_set (G_OBJECT (manager->udpsrc[0]), "buffer-size", 512000, NULL);
+     * posted */
+    g_object_set (G_OBJECT (manager->udpsrc[0]), "timeout",
+        manager->udp_timeout * 1000, NULL);
 
-    GST_DEBUG_OBJECT (manager, "got outpad from udpsrc");
+    caps = gst_caps_new_simple ("application/x-rtp",
+                    "media", G_TYPE_STRING, "video", "payload", G_TYPE_INT, 33,
+                    "clock-rate", G_TYPE_INT, 90000, "encoding-params", G_TYPE_STRING, "MP2T-ES", NULL);
+    g_object_set (manager->udpsrc[0], "caps", caps, NULL);
+    gst_caps_unref (caps);
+
     /* get output pad of the UDP source. */
     outpad = gst_element_get_static_pad (manager->udpsrc[0], "src");
 
@@ -593,20 +521,19 @@ wfd_rtsp_manager_configure_udp (WFDRTSPManager *manager, gint rtpport, gint rtcp
     manager->blockid =
         gst_pad_add_probe (manager->blockedpad,
         GST_PAD_PROBE_TYPE_BLOCK | GST_PAD_PROBE_TYPE_BUFFER |
-        GST_PAD_PROBE_TYPE_BUFFER_LIST, (GstPadProbeCallback) pad_blocked, manager, NULL);
+        GST_PAD_PROBE_TYPE_BUFFER_LIST, pad_blocked, manager, NULL);
 
-    /* RTP port */
     if (manager->channelpad[0]) {
-      GST_DEBUG_OBJECT (manager, "connecting to session");
+      GST_DEBUG_OBJECT (manager, "connecting UDP source 0 to session");
       /* configure for UDP delivery, we need to connect the UDP pads to
        * the session plugin. */
       gst_pad_link_full (outpad, manager->channelpad[0],
           GST_PAD_LINK_CHECK_NOTHING);
-    gst_object_unref (outpad);
+      gst_object_unref (outpad);
       outpad = NULL;
       /* we connected to pad-added signal to get pads from the manager */
     } else {
-      GST_DEBUG_OBJECT (manager, "using UDP src pad as output");
+      /* leave unlinked */
     }
   }
 
@@ -624,7 +551,7 @@ wfd_rtsp_manager_configure_udp (WFDRTSPManager *manager, gint rtpport, gint rtcp
     if (manager->channelpad[1]) {
       GstPad *pad;
 
-      GST_DEBUG_OBJECT (manager, "connecting UDP source 1 to manager");
+      GST_DEBUG_OBJECT (manager, "connecting UDP source 1 to session");
 
       pad = gst_element_get_static_pad (manager->udpsrc[1], "src");
       gst_pad_link_full (pad, manager->channelpad[1],
@@ -636,41 +563,6 @@ wfd_rtsp_manager_configure_udp (WFDRTSPManager *manager, gint rtpport, gint rtcp
   }
 
   return TRUE;
-
-  /* ERRORS */
-no_udp_protocol:
-  {
-    GST_DEBUG_OBJECT (manager, "could not get UDP source");
-    goto cleanup;
-  }
-no_ports:
-  {
-    GST_DEBUG_OBJECT (manager, "could not allocate UDP port pair");
-    goto cleanup;
-  }
-no_udp_rtcp_protocol:
-  {
-    GST_DEBUG_OBJECT (manager, "could not get UDP source for RTCP");
-    goto cleanup;
-  }
-port_error:
-  {
-    GST_DEBUG_OBJECT (manager, "ports don't match rtp: %d<->%d, rtcp: %d<->%d",
-        tmp_rtp, rtpport, tmp_rtcp, rtcpport);
-    goto cleanup;
-  }
-cleanup:
-  {
-    if (udpsrc0) {
-      gst_element_set_state (udpsrc0, GST_STATE_NULL);
-      gst_object_unref (udpsrc0);
-    }
-    if (udpsrc1) {
-      gst_element_set_state (udpsrc1, GST_STATE_NULL);
-      gst_object_unref (udpsrc1);
-    }
-    return FALSE;
-  }
 }
 
 static void
@@ -861,6 +753,118 @@ request_pt_map_for_session (GstElement * session, guint session_id, guint pt, WF
   return caps;
 }
 
+gboolean
+wfd_rtsp_manager_prepare_transport (WFDRTSPManager * manager,
+    gint rtpport, gint rtcpport)
+{
+  GstStateChangeReturn ret;
+  GstElement *udpsrc0, *udpsrc1;
+  gint tmp_rtp, tmp_rtcp;
+  const gchar *host;
+
+  udpsrc0 = NULL;
+  udpsrc1 = NULL;
+
+  if (manager->is_ipv6)
+    host = "udp://[::0]";
+  else
+    host = "udp://0.0.0.0";
+
+  /* try to allocate 2 UDP ports */
+  udpsrc0 = gst_element_make_from_uri (GST_URI_SRC, host, NULL, NULL);
+  if (udpsrc0 == NULL)
+    goto no_udp_protocol;
+  g_object_set (G_OBJECT (udpsrc0), "port", rtpport, "reuse", FALSE, NULL);
+
+  if (manager->udp_buffer_size != 0)
+    g_object_set (G_OBJECT (udpsrc0), "buffer-size", manager->udp_buffer_size,
+        NULL);
+
+  ret = gst_element_set_state (udpsrc0, GST_STATE_READY);
+  if (ret == GST_STATE_CHANGE_FAILURE) {
+    GST_ERROR_OBJECT (manager, "Unable to make udpsrc from RTP port %d", tmp_rtp);
+    /* port not even, free RTP udpsrc */
+    goto no_ports;
+  }
+
+  g_object_get (G_OBJECT (udpsrc0), "port", &tmp_rtp, NULL);
+  GST_DEBUG_OBJECT (manager, "got RTP port %d", tmp_rtp);
+
+  /* check if port is even */
+  if ((tmp_rtp & 0x01) != 0) {
+    GST_DEBUG_OBJECT (manager, "RTP port not even");
+    /* port not even, free RTP udpsrc */
+    goto no_ports;
+  }
+
+  /* allocate port+1 for RTCP now */
+  udpsrc1 = gst_element_make_from_uri (GST_URI_SRC, host, NULL, NULL);
+  if (udpsrc1 == NULL)
+    goto no_udp_rtcp_protocol;
+
+  /* set port */
+  g_object_set (G_OBJECT (udpsrc1), "port", rtcpport, "reuse", FALSE, NULL);
+
+  GST_DEBUG_OBJECT (manager, "starting RTCP on port %d", rtcpport);
+  ret = gst_element_set_state (udpsrc1, GST_STATE_READY);
+  if (ret == GST_STATE_CHANGE_FAILURE) {
+    GST_ERROR_OBJECT (manager, "Unable to make udpsrc from RTCP port %d", tmp_rtcp);
+    goto no_ports;
+  }
+
+  /* all fine, do port check */
+  g_object_get (G_OBJECT (udpsrc0), "port", &tmp_rtp, NULL);
+  g_object_get (G_OBJECT (udpsrc1), "port", &tmp_rtcp, NULL);
+
+  /* this should not happen... */
+  if (rtpport != tmp_rtp || rtcpport != tmp_rtcp)
+    goto port_error;
+
+  /* we keep these elements, we configure all in configure_transport when the
+   * server told us to really use the UDP ports. */
+  manager->udpsrc[0] = gst_object_ref_sink (udpsrc0);
+  manager->udpsrc[1] = gst_object_ref_sink (udpsrc1);
+  gst_element_set_locked_state (manager->udpsrc[0], TRUE);
+  gst_element_set_locked_state (manager->udpsrc[1], TRUE);
+
+  return TRUE;
+
+  /* ERRORS */
+no_udp_protocol:
+  {
+    GST_DEBUG_OBJECT (manager, "could not get UDP source");
+    goto cleanup;
+  }
+no_ports:
+  {
+    GST_DEBUG_OBJECT (manager, "could not allocate UDP port pair");
+    goto cleanup;
+  }
+no_udp_rtcp_protocol:
+  {
+    GST_DEBUG_OBJECT (manager, "could not get UDP source for RTCP");
+    goto cleanup;
+  }
+port_error:
+  {
+    GST_DEBUG_OBJECT (manager, "ports don't match rtp: %d<->%d, rtcp: %d<->%d",
+        tmp_rtp, rtpport, tmp_rtcp, rtcpport);
+    goto cleanup;
+  }
+cleanup:
+  {
+    if (udpsrc0) {
+      gst_element_set_state (udpsrc0, GST_STATE_NULL);
+      gst_object_unref (udpsrc0);
+    }
+    if (udpsrc1) {
+      gst_element_set_state (udpsrc1, GST_STATE_NULL);
+      gst_object_unref (udpsrc1);
+    }
+    return FALSE;
+  }
+}
+
 static gboolean
 wfd_rtsp_manager_configure_manager (WFDRTSPManager * manager)
 {
@@ -964,7 +968,7 @@ wfd_rtsp_manager_configure_manager (WFDRTSPManager * manager)
 
 gboolean
 wfd_rtsp_manager_configure_transport (WFDRTSPManager * manager,
-    GstRTSPTransport * transport, gint rtpport, gint rtcpport)
+    GstRTSPTransport * transport)
 {
   const gchar * mime;
 
@@ -989,7 +993,7 @@ wfd_rtsp_manager_configure_transport (WFDRTSPManager * manager,
     case GST_RTSP_LOWER_TRANS_UDP_MCAST:
      goto transport_failed;
     case GST_RTSP_LOWER_TRANS_UDP:
-      if (!wfd_rtsp_manager_configure_udp (manager, rtpport, rtcpport))
+      if (!wfd_rtsp_manager_configure_udp (manager))
         goto transport_failed;
       if (!wfd_rtsp_manager_configure_udp_sinks (manager, transport))
         goto transport_failed;

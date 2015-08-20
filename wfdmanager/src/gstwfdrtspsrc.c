@@ -2428,6 +2428,13 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
     goto setup_transport_failed;
   }
 
+    /* now prepare the manager with the selected transport */
+    if (!wfd_rtsp_manager_prepare_transport (manager,
+		src->primary_rtpport, src->primary_rtpport+1)) {
+      GST_DEBUG_OBJECT (src, "could not prepare transport");
+      goto setup_failed;
+    }
+
   /* create SETUP request */
   res = gst_rtsp_message_init_request (&request, GST_RTSP_SETUP, src->conninfo.location);
   if (res < 0) {
@@ -2497,8 +2504,7 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
     }
 
     /* now configure the manager with the selected transport */
-    if (!wfd_rtsp_manager_configure_transport (manager, &transport,
-		src->primary_rtpport, src->primary_rtpport+1)) {
+    if (!wfd_rtsp_manager_configure_transport (manager, &transport)) {
       GST_DEBUG_OBJECT (src, "could not configure transport");
       goto setup_failed;
     }

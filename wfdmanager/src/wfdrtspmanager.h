@@ -139,8 +139,11 @@ WFDRTSPManager*
 wfd_rtsp_manager_new  (GstElement *wfdrtspsrc);
 
 gboolean
+wfd_rtsp_manager_prepare_transport (WFDRTSPManager * manager,
+    gint rtpport, gint rtcpport);
+gboolean
 wfd_rtsp_manager_configure_transport (WFDRTSPManager * manager,
-    GstRTSPTransport * transport, gint rtpport, gint rtcpport);
+    GstRTSPTransport * transport);
 
 GstRTSPResult
 wfd_rtsp_manager_message_dump (GstRTSPMessage * msg);
