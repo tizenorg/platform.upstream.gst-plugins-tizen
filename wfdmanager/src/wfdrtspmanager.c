@@ -103,128 +103,10 @@ static void wfd_rtsp_manager_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
 static void wfd_rtsp_manager_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
+
+static void wfd_rtsp_manager_enable_pad_probe(WFDRTSPManager * manager);
 GstPadProbeReturn
 wfd_rtsp_manager_pad_probe_cb(GstPad * pad, GstPadProbeInfo *info, gpointer u_data);
-
-/*rtsp dump code start*/
-typedef struct _RTSPKeyValue
-{
-  GstRTSPHeaderField field;
-  gchar *value;
-  gchar *custom_key;            /* custom header string (field is INVALID then) */
-} RTSPKeyValue;
-
-static void
-wfd_rtsp_manager_key_value_foreach (GArray * array, GFunc func, gpointer user_data)
-{
-  guint i;
-
-  g_return_if_fail (array != NULL);
-
-  for (i = 0; i < array->len; i++) {
-    (*func) (&g_array_index (array, RTSPKeyValue, i), user_data);
-  }
-}
-
-static void
-wfd_rtsp_manager_dump_key_value (gpointer data, gpointer user_data G_GNUC_UNUSED)
-{
-  RTSPKeyValue *key_value = (RTSPKeyValue *) data;
-  const gchar *key_string;
-
-  if (key_value->custom_key != NULL)
-    key_string = key_value->custom_key;
-  else
-    key_string = gst_rtsp_header_as_text (key_value->field);
-
-  GST_ERROR ("   key: '%s', value: '%s'\n", key_string, key_value->value);
-}
-
-GstRTSPResult
-wfd_rtsp_manager_message_dump (GstRTSPMessage * msg)
-{
-  guint8 *data;
-  guint size;
-
-  g_return_val_if_fail (msg != NULL, GST_RTSP_EINVAL);
-
-  GST_ERROR("------------------------------------------------------");
-  switch (msg->type) {
-    case GST_RTSP_MESSAGE_REQUEST:
-      GST_ERROR ("RTSP request message %p", msg);
-      GST_ERROR (" request line:");
-      GST_ERROR ("   method: '%s'",
-          gst_rtsp_method_as_text (msg->type_data.request.method));
-      GST_ERROR ("   uri:    '%s'", msg->type_data.request.uri);
-      GST_ERROR ("   version: '%s'",
-          gst_rtsp_version_as_text (msg->type_data.request.version));
-      GST_ERROR (" headers:");
-      wfd_rtsp_manager_key_value_foreach (msg->hdr_fields, wfd_rtsp_manager_dump_key_value, NULL);
-      GST_ERROR (" body:");
-      gst_rtsp_message_get_body (msg, &data, &size);
-      //gst_util_dump_mem (data, size);
-      if (size > 0) GST_ERROR ("%s(%d)", data, size);
-      break;
-    case GST_RTSP_MESSAGE_RESPONSE:
-      GST_ERROR ("RTSP response message %p", msg);
-      GST_ERROR (" status line:");
-      GST_ERROR ("   code:   '%d'", msg->type_data.response.code);
-      GST_ERROR ("   reason: '%s'", msg->type_data.response.reason);
-      GST_ERROR ("   version: '%s'",
-          gst_rtsp_version_as_text (msg->type_data.response.version));
-      GST_ERROR (" headers:");
-      wfd_rtsp_manager_key_value_foreach (msg->hdr_fields, wfd_rtsp_manager_dump_key_value, NULL);
-      gst_rtsp_message_get_body (msg, &data, &size);
-      GST_ERROR (" body: length %d", size);
-      //gst_util_dump_mem (data, size);
-      if (size > 0) GST_ERROR ("%s(%d)", data, size);
-      break;
-    case GST_RTSP_MESSAGE_HTTP_REQUEST:
-      GST_ERROR ("HTTP request message %p", msg);
-      GST_ERROR (" request line:");
-      GST_ERROR ("   method:  '%s'",
-          gst_rtsp_method_as_text (msg->type_data.request.method));
-      GST_ERROR ("   uri:     '%s'", msg->type_data.request.uri);
-      GST_ERROR ("   version: '%s'",
-          gst_rtsp_version_as_text (msg->type_data.request.version));
-      GST_ERROR (" headers:");
-      wfd_rtsp_manager_key_value_foreach (msg->hdr_fields, wfd_rtsp_manager_dump_key_value, NULL);
-      GST_ERROR (" body:");
-      gst_rtsp_message_get_body (msg, &data, &size);
-      //gst_util_dump_mem (data, size);
-      if (size > 0) GST_ERROR ("%s(%d)", data, size);
-      break;
-    case GST_RTSP_MESSAGE_HTTP_RESPONSE:
-      GST_ERROR ("HTTP response message %p", msg);
-      GST_ERROR (" status line:");
-      GST_ERROR ("   code:    '%d'", msg->type_data.response.code);
-      GST_ERROR ("   reason:  '%s'", msg->type_data.response.reason);
-      GST_ERROR ("   version: '%s'",
-          gst_rtsp_version_as_text (msg->type_data.response.version));
-      GST_ERROR (" headers:");
-      wfd_rtsp_manager_key_value_foreach (msg->hdr_fields, wfd_rtsp_manager_dump_key_value, NULL);
-      gst_rtsp_message_get_body (msg, &data, &size);
-      GST_ERROR (" body: length %d", size);
-      //gst_util_dump_mem (data, size);
-      if (size > 0) GST_ERROR ("%s(%d)", data, size);
-      break;
-    case GST_RTSP_MESSAGE_DATA:
-      GST_ERROR ("RTSP data message %p", msg);
-      GST_ERROR (" channel: '%d'", msg->type_data.data.channel);
-      GST_ERROR (" size:    '%d'", msg->body_size);
-      gst_rtsp_message_get_body (msg, &data, &size);
-      //gst_util_dump_mem (data, size);
-      if (size > 0) GST_ERROR ("%s(%d)", data, size);
-      break;
-    default:
-      GST_ERROR ("unsupported message type %d", msg->type);
-      return GST_RTSP_EINVAL;
-  }
-
-  GST_ERROR("------------------------------------------------------");
-  return GST_RTSP_OK;
-}
-/*rtsp dump code end*/
 
 static void
 wfd_rtsp_manager_class_init (WFDRTSPManagerClass * klass)
@@ -962,6 +844,9 @@ wfd_rtsp_manager_configure_manager (WFDRTSPManager * manager)
   }
   gst_object_unref (pad);
 
+  if(manager->enable_pad_probe)
+    wfd_rtsp_manager_enable_pad_probe(manager);
+
   return TRUE;
 }
 
@@ -1022,100 +907,6 @@ no_manager:
   {
     GST_DEBUG_OBJECT (manager, "cannot get a session manager");
     return FALSE;
-  }
-}
-
-static gboolean
-wfd_rtsp_manager_push_event (WFDRTSPManager * manager, GstEvent * event, gboolean source)
-{
-  gboolean res = TRUE;
-
-  g_return_val_if_fail(manager,  FALSE);
-  g_return_val_if_fail(event && GST_IS_EVENT(event),  FALSE);
-
-  /* only wfdrtspsrcs that have a connection to the outside world */
-  if (manager->srcpad == NULL)
-    goto done;
-
-  GST_DEBUG_OBJECT(manager, "push %s envet", GST_EVENT_TYPE_NAME(event));
-
-  if (source && manager->udpsrc[0]) {
-    gst_event_ref (event);
-    res = gst_element_send_event (manager->udpsrc[0], event);
-  } else if (manager->channelpad[0]) {
-    gst_event_ref (event);
-    if (GST_PAD_IS_SRC (manager->channelpad[0]))
-      res = gst_pad_push_event (manager->channelpad[0], event);
-    else
-      res = gst_pad_send_event (manager->channelpad[0], event);
-  }
-
-done:
-  gst_event_unref (event);
-
-  return res;
-}
-
-void
-wfd_rtsp_manager_flush (WFDRTSPManager * manager, gboolean flush)
-{
-  GstEvent *event = NULL;
-  GstClock *clock = NULL;
-  GstClockTime base_time = GST_CLOCK_TIME_NONE;
-  gint i;
-
-  if (flush) {
-    event = gst_event_new_flush_start ();
-    GST_DEBUG_OBJECT(manager, "start flush");
-   } else {
-    event = gst_event_new_flush_stop (TRUE);
-    GST_DEBUG_OBJECT(manager, "stop flush");
-    clock = gst_element_get_clock (GST_ELEMENT_CAST (manager->wfdrtspsrc));
-    if (clock) {
-      base_time = gst_clock_get_time (clock);
-      gst_object_unref (clock);
-    }
-  }
-
-  if(flush) {
-    GST_DEBUG_OBJECT (manager, "need to pause udpsrc");
-
-    for (i=0; i<2; i++) {
-      if (manager->udpsrc[i]) {
-        gst_element_set_locked_state (manager->udpsrc[i], TRUE);
-        gst_element_set_state (manager->udpsrc[i], GST_STATE_PAUSED);
-      }
-    }
-  }
-
-  wfd_rtsp_manager_push_event (manager, event, FALSE);
-
-  if (manager->session)
-    gst_element_set_base_time (GST_ELEMENT_CAST (manager->session), base_time);
-  if (manager->wfdrtpbuffer)
-    gst_element_set_base_time (GST_ELEMENT_CAST (manager->wfdrtpbuffer), base_time);
-
-  /* make running time start start at 0 again */
-  for (i = 0; i < 2; i++) {
-    if (manager->udpsrc[i]) {
-      if (base_time != GST_CLOCK_TIME_NONE)
-        gst_element_set_base_time (manager->udpsrc[i], base_time);
-    }
-  }
-
-  /* for tcp interleaved case */
-  if (base_time != GST_CLOCK_TIME_NONE)
-    gst_element_set_base_time (GST_ELEMENT_CAST (manager->wfdrtspsrc), base_time);
-
-  if(!flush) {
-    GST_DEBUG_OBJECT (manager, "need to run udpsrc");
-
-    for (i=0; i<2; i++) {
-      if (manager->udpsrc[i]) {
-        gst_element_set_locked_state (manager->udpsrc[i], FALSE);
-        gst_element_set_state (manager->udpsrc[i], GST_STATE_PLAYING);
-      }
-    }
   }
 }
 
@@ -1183,7 +974,7 @@ wfd_rtsp_manager_pad_probe_cb(GstPad * pad, GstPadProbeInfo *info, gpointer u_da
   return GST_PAD_PROBE_OK;
 }
 
-void wfd_rtsp_manager_enable_pad_probe(WFDRTSPManager * manager)
+static void wfd_rtsp_manager_enable_pad_probe(WFDRTSPManager * manager)
 {
   GstPad * pad = NULL;
 

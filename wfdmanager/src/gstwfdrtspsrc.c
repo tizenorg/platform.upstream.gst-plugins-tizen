@@ -218,10 +218,7 @@ static gboolean gst_wfdrtspsrc_uri_set_uri (GstURIHandler * handler,
     const gchar * uri, GError **error);
 
 static gboolean gst_wfdrtspsrc_loop (GstWFDRTSPSrc * src);
-static gboolean gst_wfdrtspsrc_stream_push_event (WFDRTSPManager * manager,
-    GstEvent * event, gboolean source);
-static gboolean gst_wfdrtspsrc_push_event (GstWFDRTSPSrc * src, GstEvent * event,
-    gboolean source);
+static gboolean gst_wfdrtspsrc_push_event (GstWFDRTSPSrc * src, GstEvent * event);
 
 
 static GstRTSPResult
@@ -249,6 +246,9 @@ static void
 gst_wfdrtspsrc_send_close_cmd (GstWFDRTSPSrc * src);
 static void
 gst_wfdrtspsrc_set_standby (GstWFDRTSPSrc * src);
+
+static GstRTSPResult
+gst_wfdrtspsrc_message_dump (GstRTSPMessage * msg);
 
 #ifdef ENABLE_WFD_MESSAGE
 static gint
@@ -754,6 +754,30 @@ gst_wfdrtspsrc_cleanup (GstWFDRTSPSrc * src)
   GST_DEBUG_OBJECT (src, "cleanup");
 }
 
+static void
+gst_wfdrtspsrc_flush (GstWFDRTSPSrc * src, gboolean flush)
+{
+  GstEvent *event;
+  gint cmd;
+  GstState state;
+
+  if (flush) {
+    event = gst_event_new_flush_start ();
+    GST_DEBUG_OBJECT (src, "start flush");
+    cmd = CMD_WAIT;
+    state = GST_STATE_PAUSED;
+  } else {
+    event = gst_event_new_flush_stop (FALSE);
+    GST_DEBUG_OBJECT (src, "stop flush");
+    cmd = CMD_LOOP;
+    state = GST_STATE_PLAYING;
+  }
+  gst_wfdrtspsrc_push_event (src, event);
+  gst_wfdrtspsrc_loop_send_cmd (src, cmd);
+
+  wfd_rtsp_manager_set_state (src->manager, state);
+}
+
 static GstRTSPResult
 gst_wfdrtspsrc_connection_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
     GstRTSPMessage * message, GTimeVal * timeout)
@@ -761,7 +785,7 @@ gst_wfdrtspsrc_connection_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
   GstRTSPResult ret = GST_RTSP_OK;
 
   if (src->debug)
-    wfd_rtsp_manager_message_dump (message);
+    gst_wfdrtspsrc_message_dump (message);
 
   if (conn)
     ret = gst_rtsp_connection_send (conn, message, timeout);
@@ -783,7 +807,7 @@ gst_wfdrtspsrc_connection_receive (GstWFDRTSPSrc * src, GstRTSPConnection * conn
     ret = GST_RTSP_ERROR;
 
   if (src->debug)
-    wfd_rtsp_manager_message_dump (message);
+    gst_wfdrtspsrc_message_dump (message);
 
   return ret;
 }
@@ -1073,14 +1097,18 @@ gst_wfdrtspsrc_configure_caps (GstWFDRTSPSrc * src)
 }
 
 static gboolean
-gst_wfdrtspsrc_stream_push_event (WFDRTSPManager * manager, GstEvent * event, gboolean source)
+gst_wfdrtspsrc_push_event (GstWFDRTSPSrc * src, GstEvent * event)
 {
+  WFDRTSPManager * manager;
   gboolean res = TRUE;
 
-  if (manager->srcpad == NULL)
-    goto done;
+  g_return_val_if_fail(GST_IS_EVENT(event), FALSE);
 
-  if (source && manager->udpsrc[0]) {
+  manager = src->manager;
+
+  gst_event_ref (event);
+
+  if (manager->udpsrc[0]) {
     gst_event_ref (event);
     res = gst_element_send_event (manager->udpsrc[0], event);
   } else if (manager->channelpad[0]) {
@@ -1091,7 +1119,7 @@ gst_wfdrtspsrc_stream_push_event (WFDRTSPManager * manager, GstEvent * event, gb
       res = gst_pad_send_event (manager->channelpad[0], event);
   }
 
-  if (source && manager->udpsrc[1]) {
+  if (manager->udpsrc[1]) {
     gst_event_ref (event);
     res &= gst_element_send_event (manager->udpsrc[1], event);
   } else if (manager->channelpad[1]) {
@@ -1102,22 +1130,7 @@ gst_wfdrtspsrc_stream_push_event (WFDRTSPManager * manager, GstEvent * event, gb
       res &= gst_pad_send_event (manager->channelpad[1], event);
   }
 
-done:
   gst_event_unref (event);
-
-  return res;
-}
-
-static gboolean
-gst_wfdrtspsrc_push_event (GstWFDRTSPSrc * src, GstEvent * event, gboolean source)
-{
-  gboolean res = TRUE;
-
-  if (src->manager) {
-    gst_event_ref (event);
-    res = gst_wfdrtspsrc_stream_push_event (src->manager, event, source);
-    gst_event_unref (event);
-  }
 
   return res;
 }
@@ -1235,7 +1248,6 @@ gst_wfdrtspsrc_connection_flush (GstWFDRTSPSrc * src, gboolean flush)
   GST_DEBUG_OBJECT (src, "flushing %d is done", flush);
 }
 
-
 static GstRTSPResult
 gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
     GstRTSPMessage * request)
@@ -1332,7 +1344,6 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
         res = gst_rtsp_connection_reset_timeout (src->conninfo.connection);
         if (res < 0)
           goto send_error;
-
         break;
       }
 
@@ -1713,8 +1724,8 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
           g_signal_emit (src, gst_wfdrtspsrc_signals[SIGNAL_AV_FORMAT_CHANGE], 0, (gpointer)&need_to_flush);
 
           if (need_to_flush) {
-            wfd_rtsp_manager_flush(src->manager, TRUE);
-            wfd_rtsp_manager_flush(src->manager, FALSE);
+            gst_wfdrtspsrc_flush(src,TRUE);
+            gst_wfdrtspsrc_flush(src, FALSE);
           }
         }
       }
@@ -2085,14 +2096,14 @@ pause:
     GST_DEBUG_OBJECT (src, "pausing task, reason %s", reason);
     if (ret == GST_FLOW_EOS) {
       /* perform EOS logic */
-      gst_wfdrtspsrc_push_event (src, gst_event_new_eos (), FALSE);
+      gst_wfdrtspsrc_push_event (src, gst_event_new_eos ());
     } else if (ret == GST_FLOW_NOT_LINKED || ret < GST_FLOW_EOS) {
       /* for fatal errors we post an error message, post the error before the
        * EOS so the app knows about the error first. */
       GST_ELEMENT_ERROR (src, STREAM, FAILED,
           ("Internal data flow error."),
           ("streaming task paused, reason %s (%d)", reason, ret));
-      gst_wfdrtspsrc_push_event (src, gst_event_new_eos (), FALSE);
+      gst_wfdrtspsrc_push_event (src, gst_event_new_eos ());
     }
 
     return FALSE;
@@ -2508,9 +2519,6 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
       GST_DEBUG_OBJECT (src, "could not configure transport");
       goto setup_failed;
     }
-
-    if(src->manager->enable_pad_probe)
-      wfd_rtsp_manager_enable_pad_probe(src->manager);
 
     /* clean up our transport struct */
     gst_rtsp_transport_init (&transport);
@@ -3362,7 +3370,7 @@ gst_wfdrtspsrc_send_event (GstElement * element, GstEvent * event)
   src = GST_WFDRTSPSRC (element);
 
   if (GST_EVENT_IS_DOWNSTREAM (event)) {
-    res = gst_wfdrtspsrc_push_event (src, event, TRUE);
+    res = gst_wfdrtspsrc_push_event (src, event);
   } else {
     res = GST_ELEMENT_CLASS (parent_class)->send_event (element, event);
   }
@@ -3897,3 +3905,124 @@ gst_wfdrtspsrc_get_video_parameter(GstWFDRTSPSrc * src, WFDMessage * msg)
 
   return GST_RTSP_OK;
 }
+
+/*rtsp dump code start*/
+typedef struct _RTSPKeyValue
+{
+  GstRTSPHeaderField field;
+  gchar *value;
+  gchar *custom_key;            /* custom header string (field is INVALID then) */
+} RTSPKeyValue;
+
+static void
+_key_value_foreach (GArray * array, GFunc func, gpointer user_data)
+{
+  guint i;
+
+  g_return_if_fail (array != NULL);
+
+  for (i = 0; i < array->len; i++) {
+    (*func) (&g_array_index (array, RTSPKeyValue, i), user_data);
+  }
+}
+
+static void
+_dump_key_value (gpointer data, gpointer user_data G_GNUC_UNUSED)
+{
+  RTSPKeyValue *key_value = (RTSPKeyValue *) data;
+  const gchar *key_string;
+
+  if (key_value->custom_key != NULL)
+    key_string = key_value->custom_key;
+  else
+    key_string = gst_rtsp_header_as_text (key_value->field);
+
+  GST_ERROR ("   key: '%s', value: '%s'", key_string, key_value->value);
+}
+
+
+static GstRTSPResult
+gst_wfdrtspsrc_message_dump (GstRTSPMessage * msg)
+{
+  guint8 *data;
+  guint size;
+
+  g_return_val_if_fail (msg != NULL, GST_RTSP_EINVAL);
+
+  GST_ERROR("------------------------------------------------------");
+  switch (msg->type) {
+    case GST_RTSP_MESSAGE_REQUEST:
+      GST_ERROR ("RTSP request message %p", msg);
+      GST_ERROR (" request line:");
+      GST_ERROR ("   method: '%s'",
+          gst_rtsp_method_as_text (msg->type_data.request.method));
+      GST_ERROR ("   uri:    '%s'", msg->type_data.request.uri);
+      GST_ERROR ("   version: '%s'",
+          gst_rtsp_version_as_text (msg->type_data.request.version));
+      GST_ERROR (" headers:");
+      _key_value_foreach (msg->hdr_fields, _dump_key_value, NULL);
+      GST_ERROR (" body:");
+      gst_rtsp_message_get_body (msg, &data, &size);
+      //gst_util_dump_mem (data, size);
+      if (size > 0) GST_ERROR ("%s(%d)", data, size);
+      break;
+    case GST_RTSP_MESSAGE_RESPONSE:
+      GST_ERROR ("RTSP response message %p", msg);
+      GST_ERROR (" status line:");
+      GST_ERROR ("   code:   '%d'", msg->type_data.response.code);
+      GST_ERROR ("   reason: '%s'", msg->type_data.response.reason);
+      GST_ERROR ("   version: '%s'",
+          gst_rtsp_version_as_text (msg->type_data.response.version));
+      GST_ERROR (" headers:");
+      _key_value_foreach (msg->hdr_fields, _dump_key_value, NULL);
+      gst_rtsp_message_get_body (msg, &data, &size);
+      GST_ERROR (" body: length %d", size);
+      //gst_util_dump_mem (data, size);
+      if (size > 0) GST_ERROR ("%s(%d)", data, size);
+      break;
+    case GST_RTSP_MESSAGE_HTTP_REQUEST:
+      GST_ERROR ("HTTP request message %p", msg);
+      GST_ERROR (" request line:");
+      GST_ERROR ("   method:  '%s'",
+          gst_rtsp_method_as_text (msg->type_data.request.method));
+      GST_ERROR ("   uri:     '%s'", msg->type_data.request.uri);
+      GST_ERROR ("   version: '%s'",
+          gst_rtsp_version_as_text (msg->type_data.request.version));
+      GST_ERROR (" headers:");
+      _key_value_foreach (msg->hdr_fields, _dump_key_value, NULL);
+      GST_ERROR (" body:");
+      gst_rtsp_message_get_body (msg, &data, &size);
+      //gst_util_dump_mem (data, size);
+      if (size > 0) GST_ERROR ("%s(%d)", data, size);
+      break;
+    case GST_RTSP_MESSAGE_HTTP_RESPONSE:
+      GST_ERROR ("HTTP response message %p", msg);
+      GST_ERROR (" status line:");
+      GST_ERROR ("   code:    '%d'", msg->type_data.response.code);
+      GST_ERROR ("   reason:  '%s'", msg->type_data.response.reason);
+      GST_ERROR ("   version: '%s'",
+          gst_rtsp_version_as_text (msg->type_data.response.version));
+      GST_ERROR (" headers:");
+      _key_value_foreach (msg->hdr_fields, _dump_key_value, NULL);
+      gst_rtsp_message_get_body (msg, &data, &size);
+      GST_ERROR (" body: length %d", size);
+      //gst_util_dump_mem (data, size);
+      if (size > 0) GST_ERROR ("%s(%d)", data, size);
+      break;
+    case GST_RTSP_MESSAGE_DATA:
+      GST_ERROR ("RTSP data message %p", msg);
+      GST_ERROR (" channel: '%d'", msg->type_data.data.channel);
+      GST_ERROR (" size:    '%d'", msg->body_size);
+      gst_rtsp_message_get_body (msg, &data, &size);
+      //gst_util_dump_mem (data, size);
+      if (size > 0) GST_ERROR ("%s(%d)", data, size);
+      break;
+    default:
+      GST_ERROR ("unsupported message type %d", msg->type);
+      return GST_RTSP_EINVAL;
+  }
+
+  GST_ERROR("------------------------------------------------------");
+  return GST_RTSP_OK;
+}
+/*rtsp dump code end*/

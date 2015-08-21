@@ -145,12 +145,6 @@ gboolean
 wfd_rtsp_manager_configure_transport (WFDRTSPManager * manager,
     GstRTSPTransport * transport);
 
-GstRTSPResult
-wfd_rtsp_manager_message_dump (GstRTSPMessage * msg);
-void
-wfd_rtsp_manager_enable_pad_probe(WFDRTSPManager * manager);
-void
-wfd_rtsp_manager_flush (WFDRTSPManager * manager, gboolean flush);
 void
 wfd_rtsp_manager_set_state (WFDRTSPManager * manager, GstState state);
 
