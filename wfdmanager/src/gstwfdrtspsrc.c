@@ -222,8 +222,7 @@ static gboolean gst_wfdrtspsrc_push_event (GstWFDRTSPSrc * src, GstEvent * event
 
 
 static GstRTSPResult
-gst_wfdrtspsrc_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
-    GstRTSPMessage * request, GstRTSPMessage * response,
+gst_wfdrtspsrc_send (GstWFDRTSPSrc * src, GstRTSPMessage * request, GstRTSPMessage * response,
     GstRTSPStatusCode * code);
 
 static gboolean gst_wfdrtspsrc_parse_methods (GstWFDRTSPSrc * src, GstRTSPMessage * response);
@@ -522,7 +521,7 @@ gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
   /* create manager */
   src->manager = wfd_rtsp_manager_new (GST_ELEMENT_CAST(src));
   if (G_UNLIKELY (src->manager == NULL)) {
-    GST_ERROR_OBJECT (src, "could not create wfdrtspmanager element");
+    GST_ERROR_OBJECT (src, "could not create wfdrtspmanager");
     return;
   }
 
@@ -536,7 +535,6 @@ gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
       GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_handle_src_event));
   gst_pad_set_query_function (src->manager->srcpad,
       GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_handle_src_query));
-
 
   src->state = GST_RTSP_STATE_INVALID;
 
@@ -779,7 +777,7 @@ gst_wfdrtspsrc_flush (GstWFDRTSPSrc * src, gboolean flush)
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_connection_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
+gst_wfdrtspsrc_connection_send (GstWFDRTSPSrc * src,
     GstRTSPMessage * message, GTimeVal * timeout)
 {
   GstRTSPResult ret = GST_RTSP_OK;
@@ -787,8 +785,8 @@ gst_wfdrtspsrc_connection_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
   if (src->debug)
     gst_wfdrtspsrc_message_dump (message);
 
-  if (conn)
-    ret = gst_rtsp_connection_send (conn, message, timeout);
+  if (src->conninfo.connection)
+    ret = gst_rtsp_connection_send (src->conninfo.connection, message, timeout);
   else
     ret = GST_RTSP_ERROR;
 
@@ -796,13 +794,13 @@ gst_wfdrtspsrc_connection_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_connection_receive (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
+gst_wfdrtspsrc_connection_receive (GstWFDRTSPSrc * src,
     GstRTSPMessage * message, GTimeVal * timeout)
 {
   GstRTSPResult ret;
 
-  if (conn)
-    ret = gst_rtsp_connection_receive (conn, message, timeout);
+  if (src->conninfo.connection)
+    ret = gst_rtsp_connection_receive (src->conninfo.connection, message, timeout);
   else
     ret = GST_RTSP_ERROR;
 
@@ -911,7 +909,7 @@ gst_wfdrtspsrc_send_request (GstWFDRTSPSrc * src)
 
   /* send request message  */
   GST_DEBUG_OBJECT (src, "send reuest...");
-  if ((res = gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response,
+  if ((res = gst_wfdrtspsrc_send (src, &request, &response,
       NULL)) < 0)
     goto error;
 
@@ -939,8 +937,6 @@ gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * eve
   gboolean res = TRUE;
   gboolean forward = FALSE;
   const GstStructure *s;
-  /*static gdouble elapsed = 0.0;
-  static int count = 0;*/
 
   src = GST_WFDRTSPSRC_CAST (parent);
   if(src == NULL)  {
@@ -1249,8 +1245,7 @@ gst_wfdrtspsrc_connection_flush (GstWFDRTSPSrc * src, gboolean flush)
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
-    GstRTSPMessage * request)
+gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
 {
   GstRTSPMethod method = GST_RTSP_INVALID;
   GstRTSPVersion version = GST_RTSP_VERSION_INVALID;
@@ -1303,7 +1298,6 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
        goto send_error;
       }
       g_free(str);
-      GST_DEBUG_OBJECT (src, "Creating OPTIONS response : %s", options_str);
 
       res = gst_rtsp_message_init_response (&response, GST_RTSP_STS_OK,
          gst_rtsp_status_as_text (GST_RTSP_STS_OK), request);
@@ -1346,9 +1340,6 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
           goto send_error;
         break;
       }
-
-      if(src->extended_wfd_message_support == FALSE)
-        goto message_config_error;
 
       WFDCONFIG_MESSAGE_NEW(&wfd_msg, message_config_error);
       WFDCONFIG_MESSAGE_INIT(wfd_msg, message_config_error);
@@ -1610,7 +1601,7 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
 
         WFDCONFIG_GET_TRIGGER_TYPE(wfd_msg, &trigger, message_config_error);
 
-        res = gst_wfdrtspsrc_connection_send (src, conn, &response, NULL);
+        res = gst_wfdrtspsrc_connection_send (src, &response, NULL);
         if (res < 0)
           goto send_error;
 
@@ -1766,7 +1757,7 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
     }
   }
 
-  res = gst_wfdrtspsrc_connection_send (src, conn, &response, src->ptcp_timeout);
+  res = gst_wfdrtspsrc_connection_send (src, &response, src->ptcp_timeout);
   if (res < 0)
     goto send_error;
 
@@ -1780,7 +1771,7 @@ done:
   /* ERRORS */
 setup_failed:
   {
-    GST_ERROR_OBJECT(src, "Error: Could not setup(error)");
+    GST_ERROR_OBJECT(src, "Could not setup(error)");
     gst_rtsp_message_unset (request);
     gst_rtsp_message_unset (&response);
     WFDCONFIG_MESSAGE_FREE(wfd_msg);
@@ -1788,7 +1779,7 @@ setup_failed:
   }
 message_config_error:
   {
-    GST_ERROR_OBJECT(src, "Error: Message config error (%d)", wfd_res);
+    GST_ERROR_OBJECT(src, "Message config error (%d)", wfd_res);
     gst_rtsp_message_unset (request);
     gst_rtsp_message_unset (&response);
     WFDCONFIG_MESSAGE_FREE(wfd_msg);
@@ -1796,7 +1787,7 @@ message_config_error:
   }
 send_error:
   {
-    GST_ERROR_OBJECT(src, "Error: Could not send message");
+    GST_ERROR_OBJECT(src, "Could not send message");
     gst_rtsp_message_unset (request);
     gst_rtsp_message_unset (&response);
     WFDCONFIG_MESSAGE_FREE(wfd_msg);
@@ -1943,11 +1934,15 @@ gst_wfdrtspsrc_loop_send_cmd (GstWFDRTSPSrc * src, gint cmd)
   GST_OBJECT_UNLOCK (src);
 }
 
-static GstFlowReturn
-gst_wfdrtspsrc_loop_udp (GstWFDRTSPSrc * src)
+static gboolean
+gst_wfdrtspsrc_loop (GstWFDRTSPSrc * src)
 {
   GstRTSPResult res = GST_RTSP_OK;
+  GstFlowReturn ret = GST_FLOW_OK;
   GstRTSPMessage message = { 0 };
+
+  if (!src->conninfo.connection || !src->conninfo.connected)
+    goto no_connection;
 
   while (TRUE) {
     GTimeVal tv_timeout;
@@ -1963,8 +1958,7 @@ gst_wfdrtspsrc_loop_udp (GstWFDRTSPSrc * src)
     /* we should continue reading the TCP socket because the server might
      * send us requests. When the session timeout expires, we need to send a
      * keep-alive request to keep the session open. */
-    res = gst_wfdrtspsrc_connection_receive (src, src->conninfo.connection,
-        &message, &tv_timeout);
+    res = gst_wfdrtspsrc_connection_receive (src, &message, &tv_timeout);
 
     switch (res) {
       case GST_RTSP_OK:
@@ -1988,9 +1982,7 @@ gst_wfdrtspsrc_loop_udp (GstWFDRTSPSrc * src)
     switch (message.type) {
       case GST_RTSP_MESSAGE_REQUEST:
         /* server sends us a request message, handle it */
-        res =
-            gst_wfdrtspsrc_handle_request (src, src->conninfo.connection,
-            &message);
+        res = gst_wfdrtspsrc_handle_request(src, &message);
         if (res == GST_RTSP_EEOF)
           goto server_eof;
         else if (res < 0)
@@ -2010,18 +2002,27 @@ gst_wfdrtspsrc_loop_udp (GstWFDRTSPSrc * src)
         break;
     }
   }
+  g_assert_not_reached ();
 
-  /* we get here when the connection got interrupted */
+  return TRUE;
+
+no_connection:
+  {
+    GST_ERROR_OBJECT (src, "we are not connected");
+    ret = GST_FLOW_FLUSHING;
+    goto pause;
+  }
 interrupt:
   {
+    /* we get here when the connection got interrupted */
     gst_rtsp_message_unset (&message);
     GST_DEBUG_OBJECT (src, "got interrupted");
-    return GST_FLOW_FLUSHING;
+    ret = GST_FLOW_FLUSHING;
+    goto pause;
   }
 connect_error:
   {
     gchar *str = gst_rtsp_strresult (res);
-    GstFlowReturn ret;
 
     src->conninfo.connected = FALSE;
     GST_ELEMENT_ERROR (src, RESOURCE, OPEN_READ_WRITE, (NULL),
@@ -2029,7 +2030,7 @@ connect_error:
     g_free (str);
     ret = GST_FLOW_ERROR;
 
-    return ret;
+    goto pause;
   }
 receive_error:
   {
@@ -2038,12 +2039,13 @@ receive_error:
     GST_ELEMENT_ERROR (src, RESOURCE, READ, (NULL),
         ("Could not receive message. (%s)", str));
     g_free (str);
-    return GST_FLOW_ERROR;
+    ret = GST_FLOW_ERROR;
+
+    goto pause;
   }
 handle_request_failed:
   {
     gchar *str = gst_rtsp_strresult (res);
-    GstFlowReturn ret;
 
     gst_rtsp_message_unset (&message);
     if (res != GST_RTSP_EINTR) {
@@ -2054,7 +2056,7 @@ handle_request_failed:
     } else {
       ret = GST_FLOW_FLUSHING;
     }
-    return ret;
+    goto pause;
   }
 server_eof:
   {
@@ -2063,30 +2065,8 @@ server_eof:
         ("The server closed the connection."));
     src->conninfo.connected = FALSE;
     gst_rtsp_message_unset (&message);
-    return GST_FLOW_EOS;
-  }
-}
+    ret = GST_FLOW_EOS;
 
-static gboolean
-gst_wfdrtspsrc_loop (GstWFDRTSPSrc * src)
-{
-  GstFlowReturn ret;
-
-  if (!src->conninfo.connection || !src->conninfo.connected)
-    goto no_connection;
-
-  ret = gst_wfdrtspsrc_loop_udp (src);
-
-  if (ret != GST_FLOW_OK)
-    goto pause;
-
-  return TRUE;
-
-  /* ERRORS */
-no_connection:
-  {
-    GST_ERROR_OBJECT (src, "we are not connected");
-    ret = GST_FLOW_FLUSHING;
     goto pause;
   }
 pause:
@@ -2105,35 +2085,31 @@ pause:
           ("streaming task paused, reason %s (%d)", reason, ret));
       gst_wfdrtspsrc_push_event (src, gst_event_new_eos ());
     }
-
     return FALSE;
   }
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_try_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
-    GstRTSPMessage * request, GstRTSPMessage * response,
-    GstRTSPStatusCode * code)
+gst_wfdrtspsrc_try_send (GstWFDRTSPSrc * src, GstRTSPMessage * request,
+    GstRTSPMessage * response, GstRTSPStatusCode * code)
 {
   GstRTSPResult res = GST_RTSP_OK;
   GstRTSPStatusCode thecode = GST_RTSP_STS_OK;
 
-  GST_DEBUG_OBJECT (src, "sending message");
-
-  res = gst_wfdrtspsrc_connection_send (src, conn, request, src->ptcp_timeout);
+  res = gst_wfdrtspsrc_connection_send (src, request, src->ptcp_timeout);
   if (res < 0)
     goto send_error;
 
-  gst_rtsp_connection_reset_timeout (conn);
+  gst_rtsp_connection_reset_timeout (src->conninfo.connection);
 
 next:
-  res = gst_wfdrtspsrc_connection_receive (src, conn, response, src->ptcp_timeout);
+  res = gst_wfdrtspsrc_connection_receive (src, response, src->ptcp_timeout);
   if (res < 0)
     goto receive_error;
 
   switch (response->type) {
     case GST_RTSP_MESSAGE_REQUEST:
-      res = gst_wfdrtspsrc_handle_request (src, conn, response);
+      res = gst_wfdrtspsrc_handle_request(src, response);
       if (res == GST_RTSP_EEOF)
         goto server_eof;
       else if (res < 0)
@@ -2220,9 +2196,8 @@ server_eof:
  */
 
 static GstRTSPResult
-gst_wfdrtspsrc_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
-    GstRTSPMessage * request, GstRTSPMessage * response,
-    GstRTSPStatusCode * code)
+gst_wfdrtspsrc_send (GstWFDRTSPSrc * src, GstRTSPMessage * request,
+    GstRTSPMessage * response, GstRTSPStatusCode * code)
 {
   GstRTSPStatusCode int_code = GST_RTSP_STS_OK;
   GstRTSPResult res = GST_RTSP_ERROR;
@@ -2232,7 +2207,7 @@ gst_wfdrtspsrc_send (GstWFDRTSPSrc * src, GstRTSPConnection * conn,
   method = request->type_data.request.method;
 
   if ((res =
-          gst_wfdrtspsrc_try_send (src, conn, request, response, &int_code)) < 0)
+          gst_wfdrtspsrc_try_send (src, request, response, &int_code)) < 0)
     goto error;
 
   /* If the user requested the code, let them handle errors, otherwise
@@ -2466,7 +2441,7 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
   }
 
   /* handle the code ourselves */
-  if ((res = gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response, &code) < 0))
+  if ((res = gst_wfdrtspsrc_send (src, &request, &response, &code) < 0))
     goto send_error;
 
   switch (code) {
@@ -2597,14 +2572,11 @@ cleanup_error:
   }
 }
 
-
-/* Parse all the wifi related messages.
- *
- * Uses wfdconfig utility to parse the wfd parameters sent from the server
+/* Note : RTSP M1~M6 :
+ *   WFD session capability negotiation
  */
-
 static GstRTSPResult
-gst_wfdrtspsrc_retrieve_wifi_parameters (GstWFDRTSPSrc * src)
+gst_wfdrtspsrc_open (GstWFDRTSPSrc * src)
 {
   GstRTSPResult res = GST_RTSP_OK;
   GstRTSPMessage request = { 0 };
@@ -2620,15 +2592,14 @@ gst_wfdrtspsrc_retrieve_wifi_parameters (GstWFDRTSPSrc * src)
   if ((res = gst_wfdrtspsrc_conninfo_connect (src, &src->conninfo)) < 0)
     goto connect_failed;
 
-  res = gst_wfdrtspsrc_connection_receive (src, src->conninfo.connection, &message,
-    src->ptcp_timeout);
+  res = gst_wfdrtspsrc_connection_receive (src, &message, src->ptcp_timeout);
   if(res != GST_RTSP_OK)
     goto connect_failed;
 
   if(message.type == GST_RTSP_MESSAGE_REQUEST) {
     method = message.type_data.request.method;
     if(method == GST_RTSP_OPTIONS) {
-      res = gst_wfdrtspsrc_handle_request (src, src->conninfo.connection, &message);
+      res = gst_wfdrtspsrc_handle_request(src, &message);
       if (res < GST_RTSP_OK)
         goto connect_failed;
     } else
@@ -2649,7 +2620,7 @@ gst_wfdrtspsrc_retrieve_wifi_parameters (GstWFDRTSPSrc * src)
 
   /* send OPTIONS */
   GST_DEBUG_OBJECT (src, "send options...");
-  if ((res = gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response,
+  if ((res = gst_wfdrtspsrc_send (src, &request, &response,
           NULL)) < 0)
     goto send_error;
 
@@ -2659,16 +2630,18 @@ gst_wfdrtspsrc_retrieve_wifi_parameters (GstWFDRTSPSrc * src)
 
  /* Receive request message from source */
 receive_request_message:
-  res = gst_wfdrtspsrc_connection_receive (src, src->conninfo.connection, &message,
+  res = gst_wfdrtspsrc_connection_receive (src, &message,
     src->ptcp_timeout);
   if(res != GST_RTSP_OK)
     goto connect_failed;
 
   if(message.type == GST_RTSP_MESSAGE_REQUEST) {
     method = message.type_data.request.method;
-    if(method == GST_RTSP_GET_PARAMETER ||method == GST_RTSP_SET_PARAMETER)
-      gst_wfdrtspsrc_handle_request (src, src->conninfo.connection, &message);
-    else
+    if(method == GST_RTSP_GET_PARAMETER ||method == GST_RTSP_SET_PARAMETER) {
+      res = gst_wfdrtspsrc_handle_request(src, &message);
+      if (res < GST_RTSP_OK)
+        goto handle_request_failed;	  
+    } else
       goto methods_error;
 
     if (src->state != GST_RTSP_STATE_READY)
@@ -2678,6 +2651,8 @@ receive_request_message:
   /* clean up any messages */
   gst_rtsp_message_unset (&request);
   gst_rtsp_message_unset (&response);
+
+  gst_wfdrtspsrc_loop_end_cmd (src, CMD_OPEN, res);
 
   return res;
 
@@ -2708,9 +2683,9 @@ create_request_failed:
     g_free (str);
     goto cleanup_error;
   }
-
 send_error:
   {
+    GST_ERROR_OBJECT (src, "send errors");
     /* Don't post a message - the rtsp_send method will have
      * taken care of it because we passed NULL for the response code */
     goto cleanup_error;
@@ -2721,9 +2696,16 @@ methods_error:
     /* error was posted */
     goto cleanup_error;
   }
-
+handle_request_failed:
+  {
+    GST_ERROR_OBJECT (src, "failed to handle request");
+    /* error was posted */
+    goto cleanup_error;
+  }
 cleanup_error:
   {
+    GST_ERROR_OBJECT (src, "failed to open");
+
     if (src->conninfo.connection) {
       GST_ERROR_OBJECT (src, "free connection");
       gst_wfdrtspsrc_conninfo_close (src, &src->conninfo, TRUE);
@@ -2731,31 +2713,6 @@ cleanup_error:
     gst_rtsp_message_unset (&request);
     gst_rtsp_message_unset (&response);
     return res;
-  }
-}
-
-
-/* Note : RTSP M1~M6 :
- *   WFD session capability negotiation
- */
-static GstRTSPResult
-gst_wfdrtspsrc_open (GstWFDRTSPSrc * src)
-{
-  GstRTSPResult res;
-
-  if ((res = gst_wfdrtspsrc_retrieve_wifi_parameters (src)) < 0)
-    goto open_failed;
-
-done:
-  gst_wfdrtspsrc_loop_end_cmd (src, CMD_OPEN, res);
-
-  return res;
-
-  /* ERRORS */
-open_failed:
-  {
-    GST_ERROR_OBJECT (src, "failed to open");
-    goto done;
   }
 }
 
@@ -2803,7 +2760,7 @@ gst_wfdrtspsrc_close (GstWFDRTSPSrc * src, gboolean only_close)
     goto create_request_failed;
 
   if ((res =
-          gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response,
+          gst_wfdrtspsrc_send (src, &request, &response,
               NULL)) < 0)
     goto send_error;
 
@@ -2964,7 +2921,7 @@ gst_wfdrtspsrc_play (GstWFDRTSPSrc * src)
 
   gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
 
-  if ((res = gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response, NULL)) < 0)
+  if ((res = gst_wfdrtspsrc_send (src, &request, &response, NULL)) < 0)
     goto send_error;
 
   gst_rtsp_message_unset (&request);
@@ -3052,7 +3009,7 @@ gst_wfdrtspsrc_pause (GstWFDRTSPSrc * src)
 
   gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar *)src->user_agent);
 
-  if ((res = gst_wfdrtspsrc_send (src, src->conninfo.connection, &request, &response, NULL)) < 0)
+  if ((res = gst_wfdrtspsrc_send (src, &request, &response, NULL)) < 0)
     goto send_error;
 
   gst_rtsp_message_unset (&request);

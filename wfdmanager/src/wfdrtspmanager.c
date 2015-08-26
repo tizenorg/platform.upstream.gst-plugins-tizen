@@ -403,7 +403,7 @@ wfd_rtsp_manager_configure_udp (WFDRTSPManager *manager)
     manager->blockid =
         gst_pad_add_probe (manager->blockedpad,
         GST_PAD_PROBE_TYPE_BLOCK | GST_PAD_PROBE_TYPE_BUFFER |
-        GST_PAD_PROBE_TYPE_BUFFER_LIST, pad_blocked, manager, NULL);
+        GST_PAD_PROBE_TYPE_BUFFER_LIST, (GstPadProbeCallback)pad_blocked, manager, NULL);
 
     if (manager->channelpad[0]) {
       GST_DEBUG_OBJECT (manager, "connecting UDP source 0 to session");
@@ -963,8 +963,8 @@ wfd_rtsp_manager_pad_probe_cb(GstPad * pad, GstPadProbeInfo *info, gpointer u_da
       gst_event_parse_segment (event, &segment);
       if (segment)
         GST_DEBUG_OBJECT (WFD_RTSP_MANAGER (u_data), "NEWSEGMENT : %"
-            G_GINT64_FORMAT " -- %" G_GINT64_FORMAT ", time %" G_GINT64_FORMAT,
-             segment->start, segment->stop, segment->time);
+            GST_TIME_FORMAT " -- %" GST_TIME_FORMAT ", time %" GST_TIME_FORMAT,
+            GST_TIME_ARGS(segment->start), GST_TIME_ARGS(segment->stop),GST_TIME_ARGS(segment->time));
     }
   }
 

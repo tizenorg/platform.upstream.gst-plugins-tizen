@@ -62,9 +62,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg);\
-    if (G_UNLIKELY (wfd_res != WFD_OK) || G_LIKELY((*(msg)) == NULL)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK) || G_LIKELY((*(msg)) == NULL))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_MESSAGE_INIT(msg, label)\
@@ -76,9 +78,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_SET_AUDIO_SINK_TYPE(msg, sink_number, label)\
@@ -90,9 +94,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, sink_number);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_SET_CONNECTOR_TYPE(msg, connector, label)\
@@ -104,9 +110,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, connector);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_SET_STANDBY(msg, standby_enable, label)\
@@ -118,9 +126,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, standby_enable);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_SET_IDR_REQUEST(msg, label)\
@@ -132,9 +142,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_SET_UIBC_CAPABILITY(msg, input_category, inp_type, inp_pair, inp_type_path_count, tcp_port, label)\
@@ -146,9 +158,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, input_category, inp_type, inp_pair, inp_type_path_count, tcp_port);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_SET_UIBC_STATUS(msg, uibc_enable, label)\
@@ -160,9 +174,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, uibc_enable);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_MESSAGE_FREE(msg)\
@@ -175,6 +191,8 @@ G_STMT_START { \
     } else {\
       wfd_res = WFD_NOT_IMPLEMENTED;\
     }\
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
 } G_STMT_END
 
@@ -187,6 +205,8 @@ G_STMT_START { \
     } else {\
       wfd_res = WFD_NOT_IMPLEMENTED;\
     }\
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
 } G_STMT_END
 
@@ -201,6 +221,8 @@ G_STMT_START { \
     text = func(msg);\
     if (!text)\
       goto label;\
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
 } G_STMT_END
 
@@ -213,9 +235,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(data, size, msg);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_SET_SUPPORTED_AUDIO_FORMAT(msg, audio_codec, audio_sampling_frequency, audio_channels, audio_bit_width, audio_latency, label)\
@@ -227,9 +251,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, audio_codec, audio_sampling_frequency, audio_channels, audio_bit_width, audio_latency);\
-     if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_SET_SUPPORTED_VIDEO_FORMAT(msg, video_codec, video_native, video_native_resolution, video_cea_support,\
@@ -263,9 +289,11 @@ G_STMT_START { \
           video_slice_enc_param,\
           video_framerate_control_support,\
           video_preferred_display_mode);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_SET_PREFERD_RTP_PORT(msg, trans, profile, lowertrans, rtp_port0, rtp_port1, label)\
@@ -277,9 +305,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, trans, profile, lowertrans, rtp_port0, rtp_port1);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_GET_PREFERD_RTP_PORT(msg, trans, profile, lowertrans, rtp_port0, rtp_port1, label)\
@@ -291,9 +321,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, trans, profile, lowertrans, rtp_port0, rtp_port1);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 
@@ -306,9 +338,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, hdcp_version, (guint32)hdcp_port_no);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_SET_COUPLED_SINK(msg, status, sink_address, label)\
@@ -320,9 +354,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, status,(gchar *)sink_address);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_GET_PRESENTATION_URL(msg, wfd_url0, wfd_url1, label)\
@@ -334,9 +370,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, wfd_url0, wfd_url1);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_GET_STANDBY(msg, standby_enable, label)\
@@ -348,9 +386,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, standby_enable);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_GET_UIBC_CAPABILITY(msg, input_category, inp_type, inp_pair, inp_type_path_count, tcp_port, label)\
@@ -362,9 +402,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, input_category, inp_type, inp_pair, inp_type_path_count, tcp_port);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_GET_UIBC_STATUS(msg, uibc_enable, label)\
@@ -376,9 +418,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, uibc_enable);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_GET_PREFERED_AUDIO_FORMAT(msg, audio_format, audio_frequency, audio_channels, audio_bitwidth, audio_latency)\
@@ -390,6 +434,8 @@ G_STMT_START { \
     } else {\
       wfd_res = WFD_NOT_IMPLEMENTED;\
     }\
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
 } G_STMT_END
 
@@ -412,6 +458,8 @@ G_STMT_START { \
     } else {\
       wfd_res = WFD_NOT_IMPLEMENTED;\
     }\
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
 } G_STMT_END
 
@@ -424,9 +472,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, trigger);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_GET_AV_FORMAT_CHANGE_TIMING(msg, PTS, DTS, label)\
@@ -438,9 +488,11 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, PTS, DTS);\
-    if (G_UNLIKELY (wfd_res != WFD_OK)) \
-      goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_SET_DISPLAY_EDID(msg, edid_supported, edid_blockcount, edid_payload, label)\
@@ -452,9 +504,11 @@ G_STMT_START { \
 	  goto label;\
 	}\
 	wfd_res = func(msg, edid_supported, edid_blockcount, edid_payload);\
-	if (G_UNLIKELY (wfd_res != WFD_OK)) \
-	  goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_GET_DISPLAY_EDID(msg, edid_supported, edid_blockcount, edid_payload, label)\
@@ -466,9 +520,11 @@ G_STMT_START { \
 	  goto label;\
 	}\
 	wfd_res = func(msg, edid_supported, edid_blockcount, edid_payload);\
-	if (G_UNLIKELY (wfd_res != WFD_OK)) \
-	  goto label; \
+  } else {\
+    wfd_res = WFD_NOT_SUPPORTED;\
   }\
+  if (G_UNLIKELY (wfd_res != WFD_OK))\
+    goto label;\
 } G_STMT_END
 
 #define WFDCONFIG_MESSAGE_CHECK(stmt, label)  \
