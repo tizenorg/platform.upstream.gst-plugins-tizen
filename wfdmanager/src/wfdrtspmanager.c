@@ -639,13 +639,10 @@ gboolean
 wfd_rtsp_manager_prepare_transport (WFDRTSPManager * manager,
     gint rtpport, gint rtcpport)
 {
-  GstStateChangeReturn ret;
-  GstElement *udpsrc0, *udpsrc1;
-  gint tmp_rtp, tmp_rtcp;
-  const gchar *host;
-
-  udpsrc0 = NULL;
-  udpsrc1 = NULL;
+  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+  GstElement *udpsrc0 = NULL, *udpsrc1 = NULL;
+  gint tmp_rtp = 0, tmp_rtcp = 0;
+  const gchar *host = NULL;
 
   if (manager->is_ipv6)
     host = "udp://[::0]";
@@ -664,7 +661,7 @@ wfd_rtsp_manager_prepare_transport (WFDRTSPManager * manager,
 
   ret = gst_element_set_state (udpsrc0, GST_STATE_READY);
   if (ret == GST_STATE_CHANGE_FAILURE) {
-    GST_ERROR_OBJECT (manager, "Unable to make udpsrc from RTP port %d", tmp_rtp);
+    GST_ERROR_OBJECT (manager, "Unable to make udpsrc from RTP port %d", rtpport);
     /* port not even, free RTP udpsrc */
     goto no_ports;
   }
@@ -690,7 +687,7 @@ wfd_rtsp_manager_prepare_transport (WFDRTSPManager * manager,
   GST_DEBUG_OBJECT (manager, "starting RTCP on port %d", rtcpport);
   ret = gst_element_set_state (udpsrc1, GST_STATE_READY);
   if (ret == GST_STATE_CHANGE_FAILURE) {
-    GST_ERROR_OBJECT (manager, "Unable to make udpsrc from RTCP port %d", tmp_rtcp);
+    GST_ERROR_OBJECT (manager, "Unable to make udpsrc from RTCP port %d", rtcpport);
     goto no_ports;
   }
 
