@@ -112,6 +112,8 @@ static gboolean gst_pd_pushsrc_get_size (GstBaseSrc * src, guint64 * size);
 static gboolean gst_pd_pushsrc_query (GstBaseSrc * src, GstQuery * query);
 static void gst_pd_pushsrc_uri_handler_init (gpointer g_iface, gpointer iface_data);
 static GstFlowReturn gst_pd_pushsrc_create (GstBaseSrc * basesrc, guint64 offset, guint length, GstBuffer ** buffer);
+static gboolean gst_pd_pushsrc_unlock (GstBaseSrc *src);
+
 static gboolean gst_pd_pushsrc_checkgetrange (GstPad * pad);
 
 G_DEFINE_TYPE_WITH_CODE (GstPDPushSrc, gst_pd_pushsrc, GST_TYPE_BASE_SRC,
@@ -147,14 +149,14 @@ gst_pd_pushsrc_class_init (GstPDPushSrcClass * klass)
           "Location of the file to read", NULL,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
-   
+
     g_object_class_install_property (gobject_class, ARG_EOS,
                                     g_param_spec_boolean ("eos",
                                         "EOS recived on downloading pipeline",
                                         "download of clip is over",
                                         0,
                                         G_PARAM_READWRITE));
-   
+
   gst_element_class_set_details_simple (gstelement_class,
       "PD push source",
       "Source/File",
@@ -168,14 +170,18 @@ gst_pd_pushsrc_class_init (GstPDPushSrcClass * klass)
   gstbasesrc_class->get_size = GST_DEBUG_FUNCPTR (gst_pd_pushsrc_get_size);
   gstbasesrc_class->query = GST_DEBUG_FUNCPTR (gst_pd_pushsrc_query);
   gstbasesrc_class->create = GST_DEBUG_FUNCPTR (gst_pd_pushsrc_create);
+  gstbasesrc_class->unlock = GST_DEBUG_FUNCPTR (gst_pd_pushsrc_unlock);
 
   if (sizeof (off_t) < 8) {
     GST_LOG ("No large file support, sizeof (off_t) = %" G_GSIZE_FORMAT "!",
         sizeof (off_t));
   }
 
+  GST_DEBUG_CATEGORY_INIT (gst_pd_pushsrc_debug, "pdpushsrc", 0,
+      "pd push src");
+
   GST_LOG ("OUT");
- 
+
 }
 
 static void
@@ -189,6 +195,7 @@ gst_pd_pushsrc_init (GstPDPushSrc * src)
   src->uri = NULL;
   src->is_regular = FALSE;
   src->is_eos = FALSE;
+  src->is_stop = FALSE;
 
   GST_LOG ("OUT");
 }
@@ -240,7 +247,7 @@ gst_pd_pushsrc_set_location (GstPDPushSrc * src, const gchar * location)
     GST_INFO ("uri      : %s", src->uri);
   }
   g_object_notify (G_OBJECT (src), "location");
-  
+
   GST_LOG ("OUT");
 
   return TRUE;
@@ -319,12 +326,12 @@ gst_pd_pushsrc_create_read (GstBaseSrc * basesrc, guint64 offset, guint length, 
   GstPDPushSrc *src;
 
   src = GST_PD_PUSHSRC_CAST (basesrc);
-  
-  GST_LOG_OBJECT (src, "read position = %"G_GUINT64_FORMAT ", offset = %"G_GUINT64_FORMAT", length = %d", 
-  	src->read_position, offset, length);
-  
+
+  GST_LOG_OBJECT (src, "read position = %"G_GUINT64_FORMAT ", offset = %"G_GUINT64_FORMAT", length = %d",
+    src->read_position, offset, length);
+
   memset (&stat_results, 0, sizeof (stat_results));
-  
+
   if (fstat (src->fd, &stat_results) < 0)
     goto could_not_stat;
 
@@ -338,7 +345,12 @@ gst_pd_pushsrc_create_read (GstBaseSrc * basesrc, guint64 offset, guint length, 
     guint64 avail_size = 0;
 
     if (src->is_eos)
-  	goto eos;
+      goto eos;
+
+    if (src->is_stop) {
+      GST_DEBUG_OBJECT (src, "reading was stopped");
+      goto was_stopped;
+    }
 
     FD_ZERO (&fds);
     FD_SET (src->fd, &fds);
@@ -349,9 +361,9 @@ gst_pd_pushsrc_create_read (GstBaseSrc * basesrc, guint64 offset, guint length, 
     GST_DEBUG_OBJECT (src, "Going to wait for %ld msec", timeout.tv_usec);
 
     ret = select (src->fd + 1, &fds, NULL, NULL, &timeout);
-    if (-1 == ret) 
+    if (-1 == ret)
     {
-      GST_ERROR_OBJECT (src, "ERROR in select () : reason - %s...\n", strerror(errno));
+      GST_ERROR_OBJECT (src, "ERROR in select () : reason - %s...\n", g_strerror(errno));
       return GST_FLOW_ERROR;
     }
     else if (0 == ret)
@@ -361,7 +373,7 @@ gst_pd_pushsrc_create_read (GstBaseSrc * basesrc, guint64 offset, guint length, 
     else
     {
       memset (&stat_results, 0, sizeof (stat_results));
-  
+
       if (fstat (src->fd, &stat_results) < 0)
         goto could_not_stat;
 
@@ -388,7 +400,7 @@ gst_pd_pushsrc_create_read (GstBaseSrc * basesrc, guint64 offset, guint length, 
       goto seek_failed;
     src->read_position = offset;
   }
-  
+
   buf = gst_buffer_new_and_alloc (length);
   if (G_UNLIKELY (buf == NULL && length > 0)) {
     GST_ERROR_OBJECT (src, "Failed to allocate %u bytes", length);
@@ -460,6 +472,10 @@ eos:
     if (buf)
       gst_buffer_unref (buf);
     return GST_FLOW_EOS;
+  }
+was_stopped:
+  {
+    return GST_FLOW_FLUSHING;
   }
 }
 
@@ -556,7 +572,7 @@ gst_pd_pushsrc_get_size (GstBaseSrc * basesrc, guint64 * size)
   *size = G_MAXUINT64;
 
   GST_DEBUG ("size of the file = %"G_GUINT64_FORMAT, *size);
-  
+
   GST_LOG ("OUT");
 
   return TRUE;
@@ -652,7 +668,7 @@ open_failed:
   }
 no_stat:
   {
-    GST_ERROR_OBJECT (src, "Could not get stat info...");	
+    GST_ERROR_OBJECT (src, "Could not get stat info...");
     GST_ELEMENT_ERROR (src, RESOURCE, OPEN_READ,
         ("Could not get info on \"\"."),  (NULL));
     close (src->fd);
@@ -668,7 +684,7 @@ was_directory:
   }
 was_socket:
   {
-   GST_ERROR_OBJECT (src, "Is a Socket");	
+   GST_ERROR_OBJECT (src, "Is a Socket");
     GST_ELEMENT_ERROR (src, RESOURCE, OPEN_READ,
         ("File \"\" is a socket."), (NULL));
     close (src->fd);
@@ -764,7 +780,7 @@ gst_pd_pushsrc_uri_set_uri (GstURIHandler * handler, const gchar * uri, GError *
 #ifdef G_OS_WIN32
   /* Unfortunately, g_filename_from_uri() doesn't handle some UNC paths
    * correctly on windows, it leaves them with an extra backslash
-   * at the start if they're of the mozilla-style file://///host/path/file 
+   * at the start if they're of the mozilla-style file://///host/path/file
    * form. Correct this.
    */
   if (location[0] == '\\' && location[1] == '\\' && location[2] == '\\')
@@ -782,6 +798,15 @@ beach:
     g_free (hostname);
 
   return ret;
+}
+
+static gboolean
+gst_pd_pushsrc_unlock (GstBaseSrc *basesrc)
+{
+  GstPDPushSrc *pdpushsrc = GST_PD_PUSHSRC (basesrc);
+  GST_DEBUG_OBJECT (pdpushsrc, "try to stop loop");
+  pdpushsrc->is_stop = TRUE;
+  return TRUE;
 }
 
 static void

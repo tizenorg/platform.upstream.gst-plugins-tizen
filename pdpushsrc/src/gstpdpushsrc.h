@@ -59,6 +59,7 @@ struct _GstPDPushSrc {
   gboolean is_regular;                  /* whether it's a (symlink to a)                                          regular file */
 
   gboolean is_eos;
+  gboolean is_stop;
 
 };
 
