@@ -1,5 +1,5 @@
 /*
- * wfdrtspsrc
+ * wfdbasesrc
  *
  * Copyright (c) 2000 - 2014 Samsung Electronics Co., Ltd. All rights reserved.
  *
@@ -46,8 +46,8 @@
 
 
 
-#ifndef __GST_WFDRTSPSRC_H__
-#define __GST_WFDRTSPSRC_H__
+#ifndef __GST_WFD_BASE_SRC_H__
+#define __GST_WFD_BASE_SRC_H__
 
 #include <gst/gst.h>
 
@@ -63,29 +63,24 @@ G_BEGIN_DECLS
 #include <fcntl.h>
 #include <netinet/in.h>
 #include "wfdrtspconfigmessage.h"
+
 #define ENABLE_WFD_MESSAGE
 
-#include "wfdrtspmanager.h"
+#define GST_TYPE_WFD_BASE_SRC (gst_wfd_base_src_get_type())
+#define GST_WFD_BASE_SRC(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_WFD_BASE_SRC,GstWFDBaseSrc))
+#define GST_WFD_BASE_SRC_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_WFD_BASE_SRC,GstWFDBaseSrcClass))
+#define GST_WFD_BASE_SRC_GET_CLASS(obj)     (G_TYPE_INSTANCE_GET_CLASS ((obj), GST_TYPE_WFD_BASE_SRC, GstWFDBaseSrcClass))
+#define GST_IS_WFD_BASE_SRC(obj)  (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_WFD_BASE_SRC))
+#define GST_IS_WFD_BASE_SRC_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_WFD_BASE_SRC))
+#define GST_WFD_BASE_SRC_CAST(obj)   ((GstWFDBaseSrc *)(obj))
 
-#define GST_TYPE_WFDRTSPSRC \
-  (gst_wfdrtspsrc_get_type())
-#define GST_WFDRTSPSRC(obj) \
-  (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_WFDRTSPSRC,GstWFDRTSPSrc))
-#define GST_WFDRTSPSRC_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_WFDRTSPSRC,GstWFDRTSPSrcClass))
-#define GST_IS_WFDRTSPSRC(obj) \
-  (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_WFDRTSPSRC))
-#define GST_IS_WFDRTSPSRC_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_WFDRTSPSRC))
-#define GST_WFDRTSPSRC_CAST(obj) \
-  ((GstWFDRTSPSrc *)(obj))
+typedef struct _GstWFDBaseSrc GstWFDBaseSrc;
+typedef struct _GstWFDBaseSrcClass GstWFDBaseSrcClass;
+typedef struct _GstWFDBaseSrcPrivate GstWFDBaseSrcPrivate;
 
-typedef struct _GstWFDRTSPSrc GstWFDRTSPSrc;
-typedef struct _GstWFDRTSPSrcClass GstWFDRTSPSrcClass;
-
-#define GST_WFD_RTSP_TASK_GET_LOCK(wfd)   ((GST_WFDRTSPSRC_CAST(wfd)->task_rec_lock))
-#define GST_WFD_RTSP_TASK_LOCK(wfd)       (g_rec_mutex_lock (&(GST_WFD_RTSP_TASK_GET_LOCK(wfd))))
-#define GST_WFD_RTSP_TASK_UNLOCK(wfd)     (g_rec_mutex_unlock (&(GST_WFD_RTSP_TASK_GET_LOCK(wfd))))
+#define GST_WFD_BASE_STATE_GET_LOCK(wfd)   ((GST_WFD_BASE_SRC_CAST(wfd)->state_rec_lock))
+#define GST_WFD_BASE_STATE_LOCK(wfd)       (g_rec_mutex_lock (&(GST_WFD_BASE_STATE_GET_LOCK(wfd))))
+#define GST_WFD_BASE_STATE_UNLOCK(wfd)     (g_rec_mutex_unlock (&(GST_WFD_BASE_STATE_GET_LOCK(wfd))))
 
 typedef enum
 {
@@ -110,73 +105,59 @@ typedef struct {
   };
 }GstWFDRequestParam;
 
-struct _GstWFDRTSPSrc {
+struct _GstWFDBaseSrc {
   GstBin           parent;
 
-  WFDRTSPManager           *manager;
+  /*< protected >*/
+  GstPad       *srcpad;
+  GstCaps      *caps;
+  gboolean      is_ipv6;
 
-  /* task and mutex */
-  GstTask         *task;
-  GRecMutex task_rec_lock;
-  gint             loop_cmd;
-  gboolean         waiting;
-  gboolean do_stop;
   GstWFDRequestParam request_param;
+  gboolean          enable_pad_probe;
 
-  /* properties */
-  GstRTSPLowerTrans protocols;
-  gboolean          debug;
-  guint             retry;
-  GTimeVal          tcp_timeout;
-  GTimeVal         *ptcp_timeout;
-  guint             rtp_blocksize;
-  GstStructure *audio_param;
-  GstStructure *video_param;
-  GstStructure *hdcp_param;
-  /* Set User-agent */
-  gchar *user_agent;
-  /* Set RTP port */
-  gint primary_rtpport;
-  gint secondary_rtpport;
-
-  /* state */
-  GstRTSPState       state;
-
-  /* supported methods */
-  gint               methods;
-
-  GstWFDRTSPConnInfo  conninfo;
-
-  guint video_height;
-  guint video_width;
-  guint video_framerate;
-  gchar * audio_format;
-  guint audio_channels;
-  guint audio_bitwidth;
-  guint audio_frequency;
+  /* mutex for protecting state changes */
+  GRecMutex        state_rec_lock;
 
 #ifdef ENABLE_WFD_MESSAGE
   void *message_handle;
   gboolean extended_wfd_message_support;
 #endif
+
+  GstWFDBaseSrcPrivate *priv;
 };
 
-struct _GstWFDRTSPSrcClass {
+struct _GstWFDBaseSrcClass {
   GstBinClass parent_class;
 
+  /*< public >*/
+  /* virtual methods for subclasses */
+  GstRTSPResult     (*handle_set_parameter)       (GstWFDBaseSrc *src, GstRTSPMessage * request, GstRTSPMessage * response);
+  GstRTSPResult      (*handle_get_parameter)     (GstWFDBaseSrc *src, GstRTSPMessage * request, GstRTSPMessage * response);
+  GstRTSPResult      (*prepare_transport)     (GstWFDBaseSrc *src, gint rtpport, gint rtcpport);
+  GstRTSPResult      (*configure_transport)    (GstWFDBaseSrc *src, GstRTSPTransport * transport);
+  gboolean      (*push_event)     (GstWFDBaseSrc *src, GstEvent *event);
+  void      (*set_state)     (GstWFDBaseSrc *src, GstState state);
+  void      (*cleanup)     (GstWFDBaseSrc *src);
+
   /* signals */
-  void     (*update_media_info)       (GstWFDRTSPSrc *src, GstStructure * str);
-  void     (*change_av_format)       (GstWFDRTSPSrc *src, gpointer *need_to_flush);
+  void     (*update_media_info)       (GstWFDBaseSrc *src, GstStructure * str);
+  void     (*change_av_format)       (GstWFDBaseSrc *src, gpointer *need_to_flush);
 
   /* actions */
-  void     (*pause)   (GstWFDRTSPSrc *src);
-  void     (*resume)   (GstWFDRTSPSrc *src);
-  void     (*close)   (GstWFDRTSPSrc *src);
-  void     (*set_standby)   (GstWFDRTSPSrc *src);
+  void     (*pause)   (GstWFDBaseSrc *src);
+  void     (*resume)   (GstWFDBaseSrc *src);
+  void     (*close)   (GstWFDBaseSrc *src);
+  void     (*set_standby)   (GstWFDBaseSrc *src);
 };
 
-GType gst_wfdrtspsrc_get_type(void);
+GType gst_wfd_base_src_get_type(void);
+
+gboolean gst_wfd_base_src_set_target (GstWFDBaseSrc * src, GstPad *target);
+gboolean gst_wfd_base_src_activate (GstWFDBaseSrc *src);
+void gst_wfd_base_src_get_transport_info (GstWFDBaseSrc *src,
+    GstRTSPTransport * transport, const gchar ** destination, gint * min, gint * max);
 
 G_END_DECLS
 
-#endif /* __GST_WFDRTSPSRC_H__ */
+#endif /* __GST_WFD_BASE_SRC_H__ */

@@ -490,7 +490,7 @@ audioeq/src/Makefile
 fimcconvert/Makefile
 fimcconvert/src/Makefile
 wfdmanager/Makefile
-wfdmanager/src/Makefile
+wfdmanager/wfdbase/Makefile
 wfdtsdemux/Makefile
 waylandsrc/Makefile
 waylandsrc/src/Makefile

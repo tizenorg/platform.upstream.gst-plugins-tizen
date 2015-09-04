@@ -1,5 +1,5 @@
 /*
- * wfdrtspsrc
+ * wfdbasesrc
  *
  * Copyright (c) 2000 - 2014 Samsung Electronics Co., Ltd. All rights reserved.
  *
@@ -45,31 +45,31 @@
  */
 
 /**
-* SECTION:element-wfdrtspsrc
+* SECTION:element-wfdbasesrc
 *
 * Makes a connection to an RTSP server and read the data.
 * Device recognition is through wifi direct.
-* wfdrtspsrc strictly follows Wifi display specification.
+* wfdbasesrc strictly follows Wifi display specification.
 *
 * RTSP supports transport over TCP or UDP in unicast or multicast mode. By
-* default wfdrtspsrc will negotiate a connection in the following order:
+* default wfdbasesrc will negotiate a connection in the following order:
 * UDP unicast/UDP multicast/TCP. The order cannot be changed but the allowed
-* protocols can be controlled with the #GstWFDRTSPSrc:protocols property.
+* protocols can be controlled with the #GstWFDBaseSrc:protocols property.
 *
-* wfdrtspsrc currently understands WFD capability negotiation messages
+* wfdbasesrc currently understands WFD capability negotiation messages
 *
-* wfdrtspsrc will internally instantiate an RTP session manager element
+* wfdbasesrc will internally instantiate an RTP session manager element
 * that will handle the RTCP messages to and from the server, jitter removal,
 * packet reordering along with providing a clock for the pipeline.
 * This feature is implemented using the gstrtpbin element.
 *
-* wfdrtspsrc acts like a live source and will therefore only generate data in the
+* wfdbasesrc acts like a live source and will therefore only generate data in the
 * PLAYING state.
 *
 * <refsect2>
 * <title>Example launch line</title>
 * |[
-* gst-launch wfdrtspsrc location=rtsp://some.server/url ! fakesink
+* gst-launch wfdbasesrc location=rtsp://some.server/url ! fakesink
 * ]| Establish a connection to an RTSP server and send the raw RTP packets to a
 * fakesink.
 * </refsect2>
@@ -90,21 +90,27 @@
 #include <arpa/inet.h>
 #include <dlfcn.h>
 
-#include "gstwfdrtspsrc.h"
+#include "gstwfdbasesrc.h"
 #include "wfdrtspmacro.h"
 
 #ifdef G_OS_WIN32
 #include <winsock2.h>
 #endif
 
-GST_DEBUG_CATEGORY_STATIC (wfdrtspsrc_debug);
-#define GST_CAT_DEFAULT (wfdrtspsrc_debug)
+GST_DEBUG_CATEGORY_STATIC (wfdbasesrc_debug);
+#define GST_CAT_DEFAULT (wfdbasesrc_debug)
 
-static GstStaticPadTemplate gst_wfdrtspsrc_src_template =
+#define GST_WFD_BASE_TASK_GET_LOCK(wfd)    (GST_WFD_BASE_SRC_CAST(wfd)->priv->task_rec_lock)
+#define GST_WFD_BASE_TASK_LOCK(wfd)        (g_rec_mutex_lock (&(GST_WFD_BASE_TASK_GET_LOCK(wfd))))
+#define GST_WFD_BASE_TASK_UNLOCK(wfd)      (g_rec_mutex_unlock(&(GST_WFD_BASE_TASK_GET_LOCK(wfd))))
+
+static GstStaticPadTemplate gst_wfd_base_src_src_template =
 GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("application/x-rtp, "
+        "media = (string) \"video\", "
+        "clock-rate = (int) 90000, "
         "payload = (int) 33"));
 
 /* signals and args */
@@ -119,16 +125,6 @@ enum
   LAST_SIGNAL
 };
 
-enum _GstWfdRtspSrcBufferMode
-{
-  BUFFER_MODE_NONE,
-  BUFFER_MODE_SLAVE,
-  BUFFER_MODE_BUFFER,
-  BUFFER_MODE_AUTO
-};
-
-#define _SET_FRAMERATE_TO_CAPS 1
-
 /* properties default values */
 #define DEFAULT_LOCATION      NULL
 #define DEFAULT_DEBUG            FALSE
@@ -140,10 +136,6 @@ enum _GstWfdRtspSrcBufferMode
 #define DEFAULT_USER_PW          NULL
 #define DEFAULT_PORT_RANGE       NULL
 #define DEFAULT_USER_AGENT       "TIZEN-WFD-SINK"
-#define DEFAULT_DO_RTCP          TRUE
-#define DEFAULT_LATENCY_MS       2000
-#define DEFAULT_UDP_BUFFER_SIZE  0x80000
-#define DEFAULT_UDP_TIMEOUT          10000000
 
 enum
 {
@@ -157,24 +149,19 @@ enum
   PROP_AUDIO_PARAM,
   PROP_VIDEO_PARAM,
   PROP_HDCP_PARAM,
-  PROP_DO_RTCP,
-  PROP_LATENCY,
-  PROP_UDP_BUFFER_SIZE,
-  PROP_UDP_TIMEOUT,
   PROP_ENABLE_PAD_PROBE,
   PROP_LAST
 };
 
-#define gst_wfdrtspsrc_parent_class parent_class
-
 /* commands we send to out loop to notify it of events */
-#define CMD_OPEN	0
-#define CMD_PLAY	1
-#define CMD_PAUSE	2
-#define CMD_CLOSE	3
-#define CMD_WAIT	4
-#define CMD_LOOP	5
-#define CMD_REQUEST	6
+#define WFD_CMD_OPEN	(1 << 0)
+#define WFD_CMD_PLAY	(1 << 1)
+#define WFD_CMD_PAUSE	(1 << 2)
+#define WFD_CMD_CLOSE	(1 << 3)
+#define WFD_CMD_WAIT	(1 << 4)
+#define WFD_CMD_REQUEST	(1 << 6)
+#define WFD_CMD_LOOP	(1 << 7)
+#define WFD_CMD_ALL         ((WFD_CMD_LOOP << 1) - 1)
 
 #define GST_ELEMENT_PROGRESS(el, type, code, text)      \
 G_STMT_START {                                          \
@@ -185,77 +172,123 @@ G_STMT_START {                                          \
   g_free (__txt);                                       \
 } G_STMT_END
 
+
+typedef struct _GstWFDConnInfo {
+  gchar              *location;
+  GstRTSPUrl         *url;
+  gchar              *url_str;
+  GstRTSPConnection  *connection;
+  gboolean            connected;
+}GstWFDConnInfo;
+
+#define GST_WFD_BASE_SRC_GET_PRIVATE(obj)  \
+   (G_TYPE_INSTANCE_GET_PRIVATE ((obj), GST_TYPE_WFD_BASE_SRC, GstWFDBaseSrcPrivate))
+
+struct _GstWFDBaseSrcPrivate
+{
+  /* state */
+  GstRTSPState       state;
+
+  /* supported RTSP methods */
+  gint               methods;
+
+  /* task and mutex */
+  GstTask         *task;
+  GRecMutex task_rec_lock;
+  gint             pending_cmd;
+  gint             busy_cmd;
+  gboolean do_stop;
+
+  /* properties */
+  gboolean          debug;
+  guint             retry;
+  GTimeVal          tcp_timeout;
+  GTimeVal         *ptcp_timeout;
+  guint             rtp_blocksize;
+  GstStructure *audio_param;
+  GstStructure *video_param;
+  GstStructure *hdcp_param;
+  gchar *user_agent;
+
+  /* Set RTP port */
+  gint primary_rtpport;
+
+  GstWFDConnInfo  conninfo;
+  GstRTSPLowerTrans protocol;
+
+  /* stream info */
+  guint video_height;
+  guint video_width;
+  guint video_framerate;
+  gchar * audio_format;
+  guint audio_channels;
+  guint audio_bitwidth;
+  guint audio_frequency;
+};
+
 /* object */
-static void gst_wfdrtspsrc_set_property (GObject * object, guint prop_id,
+static void gst_wfd_base_src_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
-static void gst_wfdrtspsrc_get_property (GObject * object, guint prop_id,
+static void gst_wfd_base_src_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
-static void gst_wfdrtspsrc_finalize (GObject * object);
 
 /* element */
-static GstStateChangeReturn gst_wfdrtspsrc_change_state (GstElement * element,
+static GstStateChangeReturn gst_wfd_base_src_change_state (GstElement * element,
     GstStateChange transition);
-static gboolean gst_wfdrtspsrc_send_event (GstElement * element, GstEvent * event);
+static gboolean gst_wfd_base_src_send_event (GstElement * element, GstEvent * event);
 
 /* bin */
-static void gst_wfdrtspsrc_handle_message (GstBin * bin, GstMessage * message);
+static void gst_wfd_base_src_handle_message (GstBin * bin, GstMessage * message);
 
-static void gst_wfdrtspsrc_loop_send_cmd (GstWFDRTSPSrc * src, gint cmd);
+/* pad */
+static gboolean gst_wfd_base_src_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * event);
+static gboolean gst_wfd_base_src_handle_src_query(GstPad * pad, GstObject *parent, GstQuery * query);
 
 /* fundemental functions */
-static GstRTSPResult gst_wfdrtspsrc_open (GstWFDRTSPSrc * src);
-static gboolean gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src);
-static GstRTSPResult gst_wfdrtspsrc_play (GstWFDRTSPSrc * src);
-static GstRTSPResult gst_wfdrtspsrc_pause (GstWFDRTSPSrc * src);
-static GstRTSPResult gst_wfdrtspsrc_close (GstWFDRTSPSrc * src, gboolean only_close);
+static GstRTSPResult gst_wfd_base_src_open (GstWFDBaseSrc * src);
+static gboolean gst_wfd_base_src_setup (GstWFDBaseSrc * src);
+static GstRTSPResult gst_wfd_base_src_play (GstWFDBaseSrc * src);
+static GstRTSPResult gst_wfd_base_src_pause (GstWFDBaseSrc * src);
+static GstRTSPResult gst_wfd_base_src_close (GstWFDBaseSrc * src, gboolean only_close);
+static void gst_wfd_base_src_send_pause_cmd (GstWFDBaseSrc * src);
+static void gst_wfd_base_src_send_play_cmd (GstWFDBaseSrc * src);
+static void gst_wfd_base_src_send_close_cmd (GstWFDBaseSrc * src);
+static void gst_wfd_base_src_set_standby (GstWFDBaseSrc * src);
 
-static void gst_wfdrtspsrc_set_tcp_timeout (GstWFDRTSPSrc * src, guint64 timeout);
-
-
-static void gst_wfdrtspsrc_uri_handler_init (gpointer g_iface,
+/* URI interface */
+static void gst_wfd_base_src_uri_handler_init (gpointer g_iface,
     gpointer iface_data);
-static gboolean gst_wfdrtspsrc_uri_set_uri (GstURIHandler * handler,
+static gboolean gst_wfd_base_src_uri_set_uri (GstURIHandler * handler,
     const gchar * uri, GError **error);
 
-static gboolean gst_wfdrtspsrc_loop (GstWFDRTSPSrc * src);
-static gboolean gst_wfdrtspsrc_push_event (GstWFDRTSPSrc * src, GstEvent * event);
+/* task */
+static GstRTSPResult gst_wfd_base_src_loop (GstWFDBaseSrc * src);
+static gboolean gst_wfd_base_src_loop_send_cmd (GstWFDBaseSrc * src, gint cmd,
+    gint mask);
+
+static gboolean gst_wfd_base_src_push_event (GstWFDBaseSrc * src, GstEvent * event);
+static void gst_wfd_base_src_set_tcp_timeout (GstWFDBaseSrc * src, guint64 timeout);
 
 
 static GstRTSPResult
-gst_wfdrtspsrc_send (GstWFDRTSPSrc * src, GstRTSPMessage * request, GstRTSPMessage * response,
+gst_wfd_base_src_send (GstWFDBaseSrc * src, GstRTSPMessage * request, GstRTSPMessage * response,
     GstRTSPStatusCode * code);
 
-static gboolean gst_wfdrtspsrc_parse_methods (GstWFDRTSPSrc * src, GstRTSPMessage * response);
+static GstRTSPResult gst_wfd_base_src_get_video_parameter(GstWFDBaseSrc * src, WFDMessage *msg);
+static GstRTSPResult gst_wfd_base_src_get_audio_parameter(GstWFDBaseSrc * src, WFDMessage *msg);
 
-static void gst_wfdrtspsrc_connection_flush (GstWFDRTSPSrc * src, gboolean flush);
+/* util */
+static GstRTSPResult _rtsp_message_dump (GstRTSPMessage * msg);
+static const char *_cmd_to_string (guint cmd);
 
-static GstRTSPResult gst_wfdrtspsrc_get_video_parameter(GstWFDRTSPSrc * src, WFDMessage *msg);
-static GstRTSPResult gst_wfdrtspsrc_get_audio_parameter(GstWFDRTSPSrc * src, WFDMessage *msg);
-
-static gboolean
-gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * event);
-static gboolean
-gst_wfdrtspsrc_handle_src_query(GstPad * pad, GstObject *parent, GstQuery * query);
-
-static void
-gst_wfdrtspsrc_send_pause_cmd (GstWFDRTSPSrc * src);
-static void
-gst_wfdrtspsrc_send_play_cmd (GstWFDRTSPSrc * src);
-static void
-gst_wfdrtspsrc_send_close_cmd (GstWFDRTSPSrc * src);
-static void
-gst_wfdrtspsrc_set_standby (GstWFDRTSPSrc * src);
-
-static GstRTSPResult
-gst_wfdrtspsrc_message_dump (GstRTSPMessage * msg);
 
 #ifdef ENABLE_WFD_MESSAGE
 static gint
-__wfd_config_message_init(GstWFDRTSPSrc * src)
+__wfd_config_message_init(GstWFDBaseSrc * src)
 {
   src->message_handle = dlopen(WFD_MESSAGE_FEATURES_PATH, RTLD_LAZY);
   if (src->message_handle == NULL) {
-    GST_ERROR("failed to init __wfd_config_message_init");
+    GST_ERROR_OBJECT(src, "failed to init __wfd_config_message_init");
     src->extended_wfd_message_support = FALSE;
     return FALSE;
   } else {
@@ -265,43 +298,67 @@ __wfd_config_message_init(GstWFDRTSPSrc * src)
 }
 
 static void *
-__wfd_config_message_func(GstWFDRTSPSrc *src, const char *func)
+__wfd_config_message_func(GstWFDBaseSrc *src, const char *func)
 {
   return dlsym(src->message_handle, func);
 }
 
 static void
-__wfd_config_message_close(GstWFDRTSPSrc *src)
+__wfd_config_message_close(GstWFDBaseSrc *src)
 {
-  GST_DEBUG("close wfd cofig message");
-
   dlclose(src->message_handle);
   src->message_handle = NULL;
   src->extended_wfd_message_support = FALSE;
 }
 #endif
 
-static guint gst_wfdrtspsrc_signals[LAST_SIGNAL] = { 0 };
+static guint gst_wfd_base_src_signals[LAST_SIGNAL] = { 0 };
 
-static void
-_do_init (GType wfdrtspsrc_type)
+static GstBinClass *parent_class = NULL;
+
+static void gst_wfd_base_src_class_init (GstWFDBaseSrcClass * klass);
+static void gst_wfd_base_src_init (GstWFDBaseSrc * src, gpointer g_class);
+static void gst_wfd_base_src_finalize (GObject * object);
+
+GType
+gst_wfd_base_src_get_type (void)
 {
+  static volatile gsize wfd_base_src_type = 0;
+
   static const GInterfaceInfo urihandler_info = {
-    gst_wfdrtspsrc_uri_handler_init,
+    gst_wfd_base_src_uri_handler_init,
     NULL,
     NULL
   };
 
-  GST_DEBUG_CATEGORY_INIT (wfdrtspsrc_debug, "wfdrtspsrc", 0, "Wi-Fi Display Sink source");
+  if (g_once_init_enter (&wfd_base_src_type)) {
+    GType object_type;
+    static const GTypeInfo wfd_base_src_info = {
+      sizeof (GstWFDBaseSrcClass),
+      NULL,
+      NULL,
+      (GClassInitFunc) gst_wfd_base_src_class_init,
+      NULL,
+      NULL,
+      sizeof (GstWFDBaseSrc),
+      0,
+      (GInstanceInitFunc) gst_wfd_base_src_init,
+    };
 
-  g_type_add_interface_static (wfdrtspsrc_type, GST_TYPE_URI_HANDLER,
-      &urihandler_info);
+    object_type = g_type_register_static (GST_TYPE_BIN,
+        "GstWFDBaseSrc", &wfd_base_src_info, G_TYPE_FLAG_ABSTRACT);
+
+    g_type_add_interface_static (object_type, GST_TYPE_URI_HANDLER,
+        &urihandler_info);
+
+    g_once_init_leave (&wfd_base_src_type, object_type);
+  }
+  return wfd_base_src_type;
 }
 
-G_DEFINE_TYPE_WITH_CODE (GstWFDRTSPSrc, gst_wfdrtspsrc, GST_TYPE_BIN, _do_init(g_define_type_id))
 
 static void
-gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
+gst_wfd_base_src_class_init (GstWFDBaseSrcClass * klass)
 {
   GObjectClass *gobject_class;
   GstElementClass *gstelement_class;
@@ -311,9 +368,15 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
   gstelement_class = (GstElementClass *) klass;
   gstbin_class = (GstBinClass *) klass;
 
-  gobject_class->set_property = gst_wfdrtspsrc_set_property;
-  gobject_class->get_property = gst_wfdrtspsrc_get_property;
-  gobject_class->finalize = gst_wfdrtspsrc_finalize;
+  GST_DEBUG_CATEGORY_INIT (wfdbasesrc_debug, "wfdbasesrc", 0, "Wi-Fi Display Sink Base Source");
+
+  g_type_class_add_private (klass, sizeof (GstWFDBaseSrcPrivate));
+
+  parent_class = g_type_class_peek_parent (klass);
+
+  gobject_class->set_property = gst_wfd_base_src_set_property;
+  gobject_class->get_property = gst_wfd_base_src_get_property;
+  gobject_class->finalize = gst_wfd_base_src_finalize;
 
   g_object_class_install_property (gobject_class, PROP_LOCATION,
       g_param_spec_string ("location", "RTSP Location",
@@ -363,87 +426,62 @@ gst_wfdrtspsrc_class_init (GstWFDRTSPSrcClass * klass)
           "A GstStructure specifies the mapping for HDCP parameters",
           GST_TYPE_STRUCTURE, G_PARAM_READWRITE));
 
-  g_object_class_install_property (gobject_class, PROP_DO_RTCP,
-      g_param_spec_boolean ("do-rtcp", "Do RTCP",
-          "Send RTCP packets, disable for old incompatible server.",
-          DEFAULT_DO_RTCP, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  g_object_class_install_property (gobject_class, PROP_LATENCY,
-      g_param_spec_uint ("latency", "Buffer latency in ms",
-          "Amount of ms to buffer", 0, G_MAXUINT, DEFAULT_LATENCY_MS,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  g_object_class_install_property (gobject_class, PROP_UDP_BUFFER_SIZE,
-      g_param_spec_int ("udp-buffer-size", "UDP Buffer Size",
-          "Size of the kernel UDP receive buffer in bytes, 0=default",
-          0, G_MAXINT, DEFAULT_UDP_BUFFER_SIZE,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  g_object_class_install_property (gobject_class, PROP_UDP_TIMEOUT,
-      g_param_spec_uint64 ("timeout", "Timeout",
-          "Fail after timeout microseconds on UDP connections (0 = disabled)",
-          0, G_MAXUINT64, DEFAULT_UDP_TIMEOUT,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
   g_object_class_install_property (gobject_class, PROP_ENABLE_PAD_PROBE,
           g_param_spec_boolean ("enable-pad-probe", "Enable Pad Probe",
               "Enable pad probe for debugging",
               FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
-  gst_wfdrtspsrc_signals[SIGNAL_UPDATE_MEDIA_INFO] =
+  gst_wfd_base_src_signals[SIGNAL_UPDATE_MEDIA_INFO] =
       g_signal_new ("update-media-info", G_TYPE_FROM_CLASS (klass),
-      G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (GstWFDRTSPSrcClass, update_media_info),
+      G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (GstWFDBaseSrcClass, update_media_info),
       NULL, NULL, g_cclosure_marshal_VOID__OBJECT, G_TYPE_NONE, 1, GST_TYPE_STRUCTURE);
 
-  gst_wfdrtspsrc_signals[SIGNAL_AV_FORMAT_CHANGE] =
+  gst_wfd_base_src_signals[SIGNAL_AV_FORMAT_CHANGE] =
       g_signal_new ("change-av-format", G_TYPE_FROM_CLASS (klass),
-      G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (GstWFDRTSPSrcClass, change_av_format),
+      G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (GstWFDBaseSrcClass, change_av_format),
       NULL, NULL, g_cclosure_marshal_VOID__POINTER, G_TYPE_NONE, 1, G_TYPE_POINTER);
 
-  gst_wfdrtspsrc_signals[SIGNAL_PAUSE] =
+  gst_wfd_base_src_signals[SIGNAL_PAUSE] =
       g_signal_new ("pause", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
-      G_STRUCT_OFFSET (GstWFDRTSPSrcClass, pause), NULL, NULL,
+      G_STRUCT_OFFSET (GstWFDBaseSrcClass, pause), NULL, NULL,
       g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
 
-  gst_wfdrtspsrc_signals[SIGNAL_RESUME] =
+  gst_wfd_base_src_signals[SIGNAL_RESUME] =
       g_signal_new ("resume", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
-      G_STRUCT_OFFSET (GstWFDRTSPSrcClass, resume), NULL, NULL,
+      G_STRUCT_OFFSET (GstWFDBaseSrcClass, resume), NULL, NULL,
       g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
 
-  gst_wfdrtspsrc_signals[SIGNAL_CLOSE] =
+  gst_wfd_base_src_signals[SIGNAL_CLOSE] =
       g_signal_new ("close", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
-      G_STRUCT_OFFSET (GstWFDRTSPSrcClass, close), NULL, NULL,
+      G_STRUCT_OFFSET (GstWFDBaseSrcClass, close), NULL, NULL,
       g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
 
-  gst_wfdrtspsrc_signals[SIGNAL_SET_STANDBY] =
+  gst_wfd_base_src_signals[SIGNAL_SET_STANDBY] =
       g_signal_new ("set-standby", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
-      G_STRUCT_OFFSET (GstWFDRTSPSrcClass, set_standby), NULL, NULL,
+      G_STRUCT_OFFSET (GstWFDBaseSrcClass, set_standby), NULL, NULL,
       g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
 
   gstelement_class->send_event =
-      GST_DEBUG_FUNCPTR(gst_wfdrtspsrc_send_event);
+      GST_DEBUG_FUNCPTR(gst_wfd_base_src_send_event);
   gstelement_class->change_state =
-      GST_DEBUG_FUNCPTR(gst_wfdrtspsrc_change_state);
+      GST_DEBUG_FUNCPTR(gst_wfd_base_src_change_state);
 
   gstbin_class->handle_message =
-      GST_DEBUG_FUNCPTR(gst_wfdrtspsrc_handle_message);
+      GST_DEBUG_FUNCPTR(gst_wfd_base_src_handle_message);
 
   gst_element_class_add_pad_template (gstelement_class,
-      gst_static_pad_template_get (&gst_wfdrtspsrc_src_template));
+      gst_static_pad_template_get (&gst_wfd_base_src_src_template));
 
-  gst_element_class_set_details_simple (gstelement_class, "Wi-Fi Display Sink source element",
-      "Source/Network",
-      "Negotiate the capability and receive the RTP packets from the Wi-Fi Display source",
-      "YeJin Cho <cho.yejin@samsung.com>");
+  klass->pause = GST_DEBUG_FUNCPTR (gst_wfd_base_src_send_pause_cmd);
+  klass->resume = GST_DEBUG_FUNCPTR (gst_wfd_base_src_send_play_cmd);
+  klass->close = GST_DEBUG_FUNCPTR (gst_wfd_base_src_send_close_cmd);
+  klass->set_standby = GST_DEBUG_FUNCPTR (gst_wfd_base_src_set_standby);
 
-  klass->pause = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_pause_cmd);
-  klass->resume = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_play_cmd);
-  klass->close = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_send_close_cmd);
-  klass->set_standby = GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_set_standby);
+  klass->push_event = GST_DEBUG_FUNCPTR (gst_wfd_base_src_push_event);
 }
 
 static GstStructure *
@@ -484,7 +522,7 @@ gst_wfd_rtsp_set_default_video_param ()
 }
 
 static void
-gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
+gst_wfd_base_src_init (GstWFDBaseSrc * src, gpointer g_class)
 {
   GstPadTemplate *template = NULL;
   gint result = FALSE;
@@ -496,92 +534,95 @@ gst_wfdrtspsrc_init (GstWFDRTSPSrc * src)
     GST_ERROR_OBJECT (src, "WSAStartup failed: 0x%08x", WSAGetLastError ());
   }
 #endif
+  src->priv = GST_WFD_BASE_SRC_GET_PRIVATE (src);
 
-  src->conninfo.location = g_strdup (DEFAULT_LOCATION);
-  src->conninfo.url_str = NULL;
-  src->debug = DEFAULT_DEBUG;
-  src->retry = DEFAULT_RETRY;
-  gst_wfdrtspsrc_set_tcp_timeout (src, DEFAULT_TCP_TIMEOUT);
-  src->rtp_blocksize = DEFAULT_RTP_BLOCKSIZE;
-  src->user_agent = g_strdup (DEFAULT_USER_AGENT);
-  src->do_stop = FALSE;
-  src->hdcp_param = NULL;
-  src->audio_param = gst_wfd_rtsp_set_default_audio_param ();
-  src->video_param = gst_wfd_rtsp_set_default_video_param ();
+  src->is_ipv6 = FALSE;
+  src->srcpad = NULL;
+
+  src->priv->conninfo.location = g_strdup (DEFAULT_LOCATION);
+  src->priv->conninfo.url_str = NULL;
+  src->priv->protocol = GST_RTSP_LOWER_TRANS_UNKNOWN;
+  src->priv->debug = DEFAULT_DEBUG;
+  src->priv->retry = DEFAULT_RETRY;
+  gst_wfd_base_src_set_tcp_timeout (src, DEFAULT_TCP_TIMEOUT);
+  src->priv->rtp_blocksize = DEFAULT_RTP_BLOCKSIZE;
+  src->priv->user_agent = g_strdup (DEFAULT_USER_AGENT);
+  src->priv->hdcp_param = NULL;
+  src->priv->audio_param = gst_wfd_rtsp_set_default_audio_param ();
+  src->priv->video_param = gst_wfd_rtsp_set_default_video_param ();
+
+  src->enable_pad_probe = FALSE;
   src->request_param.type = WFD_PARAM_NONE;
+
+  g_rec_mutex_init (&(src->state_rec_lock));
+  g_rec_mutex_init (&(src->priv->task_rec_lock));
+
 #ifdef ENABLE_WFD_MESSAGE
   result = __wfd_config_message_init(src);
   if(result == FALSE)
     return;
 #endif
 
-  /* init lock */
-  g_rec_mutex_init (&(src->task_rec_lock));
-
-  /* create manager */
-  src->manager = wfd_rtsp_manager_new (GST_ELEMENT_CAST(src));
-  if (G_UNLIKELY (src->manager == NULL)) {
-    GST_ERROR_OBJECT (src, "could not create wfdrtspmanager");
-    return;
-  }
-
   /* create ghost pad for using src pad */
-  template = gst_static_pad_template_get (&gst_wfdrtspsrc_src_template);
-  src->manager->srcpad = gst_ghost_pad_new_no_target_from_template ("src", template);
-  gst_element_add_pad (GST_ELEMENT_CAST (src), src->manager->srcpad);
+  template = gst_static_pad_template_get (&gst_wfd_base_src_src_template);
+  src->srcpad = gst_ghost_pad_new_no_target_from_template ("src", template);
+  gst_element_add_pad (GST_ELEMENT_CAST (src), src->srcpad);
   gst_object_unref (template);
 
-  gst_pad_set_event_function (src->manager->srcpad,
-      GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_handle_src_event));
-  gst_pad_set_query_function (src->manager->srcpad,
-      GST_DEBUG_FUNCPTR (gst_wfdrtspsrc_handle_src_query));
+  gst_pad_set_event_function (src->srcpad,
+      GST_DEBUG_FUNCPTR (gst_wfd_base_src_handle_src_event));
+  gst_pad_set_query_function (src->srcpad,
+      GST_DEBUG_FUNCPTR (gst_wfd_base_src_handle_src_query));
 
-  src->state = GST_RTSP_STATE_INVALID;
+  src->caps = gst_static_pad_template_get_caps (&gst_wfd_base_src_src_template);
+  gst_pad_set_caps (src->srcpad, src->caps);
+
+  src->priv->do_stop = FALSE;
+  src->priv->state = GST_RTSP_STATE_INVALID;
 
   GST_OBJECT_FLAG_SET (src, GST_ELEMENT_FLAG_SOURCE);
 }
 
 static void
-gst_wfdrtspsrc_finalize (GObject * object)
+gst_wfd_base_src_finalize (GObject * object)
 {
-  GstWFDRTSPSrc *src;
+  GstWFDBaseSrc *src;
 
-  src = GST_WFDRTSPSRC (object);
+  src = GST_WFD_BASE_SRC (object);
 
-  gst_rtsp_url_free (src->conninfo.url);
-  if (src->conninfo.location)
-    g_free (src->conninfo.location);
-  src->conninfo.location = NULL;
-  if (src->conninfo.url_str)
-    g_free (src->conninfo.url_str);
-  src->conninfo.url_str = NULL;
-  if (src->user_agent)
-    g_free (src->user_agent);
-  src->user_agent = NULL;
-  if(src->audio_param) {
-    gst_structure_free(src->audio_param);
-    src->audio_param = NULL;
-  }
-  if(src->video_param) {
-    gst_structure_free(src->video_param);
-    src->video_param = NULL;
-  }
-  if(src->hdcp_param) {
-    gst_structure_free(src->hdcp_param);
-    src->hdcp_param = NULL;
-  }
+  gst_rtsp_url_free (src->priv->conninfo.url);
+  if (src->priv->conninfo.location)
+    g_free (src->priv->conninfo.location);
+  src->priv->conninfo.location = NULL;
+  if (src->priv->conninfo.url_str)
+    g_free (src->priv->conninfo.url_str);
+  src->priv->conninfo.url_str = NULL;
+  if (src->priv->conninfo.location)
+    g_free (src->priv->conninfo.location);
+  src->priv->conninfo.location = NULL;
+  if (src->priv->conninfo.url_str)
+    g_free (src->priv->conninfo.url_str);
+  src->priv->conninfo.url_str = NULL;
+  if (src->priv->user_agent)
+    g_free (src->priv->user_agent);
+  src->priv->user_agent = NULL;
+  if(src->priv->audio_param)
+    gst_structure_free(src->priv->audio_param);
+  src->priv->audio_param = NULL;
+  if(src->priv->video_param)
+    gst_structure_free(src->priv->video_param);
+  src->priv->video_param = NULL;
+  if(src->priv->hdcp_param)
+    gst_structure_free(src->priv->hdcp_param);
+  src->priv->hdcp_param = NULL;
 
   /* free locks */
-  g_rec_mutex_clear (&(src->task_rec_lock));
+  g_rec_mutex_clear (&(src->state_rec_lock));
+  g_rec_mutex_clear (&(src->priv->task_rec_lock));
 
 #ifdef ENABLE_WFD_MESSAGE
 __wfd_config_message_close(src);
 #endif
-
-  if(src->manager) {
-    g_object_unref (G_OBJECT(src->manager));
-    src->manager = NULL;
-  }
 
 #ifdef G_OS_WIN32
   WSACleanup ();
@@ -591,93 +632,83 @@ __wfd_config_message_close(src);
 }
 
 static void
-gst_wfdrtspsrc_set_tcp_timeout (GstWFDRTSPSrc * src, guint64 timeout)
+gst_wfd_base_src_set_tcp_timeout (GstWFDBaseSrc * src, guint64 timeout)
 {
-  src->tcp_timeout.tv_sec = timeout / G_USEC_PER_SEC;
-  src->tcp_timeout.tv_usec = timeout % G_USEC_PER_SEC;
+  GstWFDBaseSrcPrivate *priv = src->priv;
+
+  priv->tcp_timeout.tv_sec = timeout / G_USEC_PER_SEC;
+  priv->tcp_timeout.tv_usec = timeout % G_USEC_PER_SEC;
 
   if (timeout != 0)
-    src->ptcp_timeout = &src->tcp_timeout;
+    priv->ptcp_timeout = &priv->tcp_timeout;
   else
-    src->ptcp_timeout = NULL;
+    priv->ptcp_timeout = NULL;
 }
 
 static void
-gst_wfdrtspsrc_set_property (GObject * object, guint prop_id, const GValue * value,
+gst_wfd_base_src_set_property (GObject * object, guint prop_id, const GValue * value,
     GParamSpec * pspec)
 {
-  GstWFDRTSPSrc *src = GST_WFDRTSPSRC (object);
+  GstWFDBaseSrc *src = GST_WFD_BASE_SRC (object);
   GError *err = NULL;
 
   switch (prop_id) {
     case PROP_LOCATION:
-      gst_wfdrtspsrc_uri_set_uri (GST_URI_HANDLER (src),
+      gst_wfd_base_src_uri_set_uri (GST_URI_HANDLER (src),
           g_value_get_string (value), &err);
       break;
     case PROP_DEBUG:
-      src->debug = g_value_get_boolean (value);
+      src->priv->debug = g_value_get_boolean (value);
       break;
     case PROP_RETRY:
-      src->retry = g_value_get_uint (value);
+      src->priv->retry = g_value_get_uint (value);
       break;
     case PROP_TCP_TIMEOUT:
-      gst_wfdrtspsrc_set_tcp_timeout (src, g_value_get_uint64 (value));
+      gst_wfd_base_src_set_tcp_timeout (src, g_value_get_uint64 (value));
       break;
     case PROP_RTP_BLOCKSIZE:
-      src->rtp_blocksize = g_value_get_uint (value);
+      src->priv->rtp_blocksize = g_value_get_uint (value);
       break;
     case PROP_USER_AGENT:
-      if (src->user_agent)
-        g_free(src->user_agent);
-      src->user_agent = g_value_dup_string (value);
+      if (src->priv->user_agent)
+        g_free(src->priv->user_agent);
+      src->priv->user_agent = g_value_dup_string (value);
       break;
     case PROP_AUDIO_PARAM:
     {
       const GstStructure *s = gst_value_get_structure (value);
-      if (src->audio_param)
-        gst_structure_free (src->audio_param);
+      if (src->priv->audio_param)
+        gst_structure_free (src->priv->audio_param);
       if (s)
-        src->audio_param = gst_structure_copy (s);
+        src->priv->audio_param = gst_structure_copy (s);
       else
-        src->audio_param = NULL;
+        src->priv->audio_param = NULL;
       break;
     }
     case PROP_VIDEO_PARAM:
     {
       const GstStructure *s = gst_value_get_structure (value);
-      if (src->video_param)
-        gst_structure_free (src->video_param);
+      if (src->priv->video_param)
+        gst_structure_free (src->priv->video_param);
       if (s)
-        src->video_param = gst_structure_copy (s);
+        src->priv->video_param = gst_structure_copy (s);
       else
-        src->video_param = NULL;
+        src->priv->video_param = NULL;
       break;
     }
     case PROP_HDCP_PARAM:
     {
       const GstStructure *s = gst_value_get_structure (value);
-      if (src->hdcp_param)
-        gst_structure_free (src->hdcp_param);
+      if (src->priv->hdcp_param)
+        gst_structure_free (src->priv->hdcp_param);
       if (s)
-        src->hdcp_param = gst_structure_copy (s);
+        src->priv->hdcp_param = gst_structure_copy (s);
       else
-        src->hdcp_param = NULL;
+        src->priv->hdcp_param = NULL;
       break;
     }
-    case PROP_DO_RTCP:
-      g_object_set_property (G_OBJECT (src->manager), "do-rtcp", value);
-      break;
-    case PROP_LATENCY:
-      g_object_set_property (G_OBJECT (src->manager), "latency", value);
-      break;
-    case PROP_UDP_BUFFER_SIZE:
-      g_object_set_property (G_OBJECT (src->manager), "udp-buffer-size", value);
-      break;
-    case PROP_UDP_TIMEOUT:
-      g_object_set_property (G_OBJECT (src->manager), "timeout", value);
-      break;
     case PROP_ENABLE_PAD_PROBE:
-      g_object_set_property (G_OBJECT (src->manager), "enable-pad-probe", value);
+      src->enable_pad_probe = g_value_get_boolean (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -686,59 +717,47 @@ gst_wfdrtspsrc_set_property (GObject * object, guint prop_id, const GValue * val
 }
 
 static void
-gst_wfdrtspsrc_get_property (GObject * object, guint prop_id, GValue * value,
+gst_wfd_base_src_get_property (GObject * object, guint prop_id, GValue * value,
     GParamSpec * pspec)
 {
-  GstWFDRTSPSrc *src = GST_WFDRTSPSRC (object);
+  GstWFDBaseSrc *src = GST_WFD_BASE_SRC (object);
 
   switch (prop_id) {
     case PROP_LOCATION:
-      g_value_set_string (value, src->conninfo.location);
+      g_value_set_string (value, src->priv->conninfo.location);
       break;
     case PROP_DEBUG:
-      g_value_set_boolean (value, src->debug);
+      g_value_set_boolean (value, src->priv->debug);
       break;
     case PROP_RETRY:
-      g_value_set_uint (value, src->retry);
+      g_value_set_uint (value, src->priv->retry);
       break;
     case PROP_TCP_TIMEOUT:
     {
       guint64 timeout;
 
-      timeout = src->tcp_timeout.tv_sec * (guint64)G_USEC_PER_SEC +
-          src->tcp_timeout.tv_usec;
+      timeout = src->priv->tcp_timeout.tv_sec * (guint64)G_USEC_PER_SEC +
+          src->priv->tcp_timeout.tv_usec;
       g_value_set_uint64 (value, timeout);
       break;
     }
     case PROP_RTP_BLOCKSIZE:
-      g_value_set_uint (value, src->rtp_blocksize);
+      g_value_set_uint (value, src->priv->rtp_blocksize);
       break;
     case PROP_USER_AGENT:
-      g_value_set_string (value, src->user_agent);
+      g_value_set_string (value, src->priv->user_agent);
       break;
     case PROP_AUDIO_PARAM:
-      gst_value_set_structure (value, src->audio_param);
+      gst_value_set_structure (value, src->priv->audio_param);
       break;
     case PROP_VIDEO_PARAM:
-      gst_value_set_structure (value, src->video_param);
+      gst_value_set_structure (value, src->priv->video_param);
       break;
     case PROP_HDCP_PARAM:
-      gst_value_set_structure (value, src->hdcp_param);
-      break;
-    case PROP_DO_RTCP:
-      g_object_get_property (G_OBJECT (src->manager), "do-rtcp", value);
-      break;
-    case PROP_LATENCY:
-      g_object_get_property (G_OBJECT (src->manager), "latency", value);
-      break;
-    case PROP_UDP_BUFFER_SIZE:
-      g_object_get_property (G_OBJECT (src->manager), "udp-buffer-size", value);
-      break;
-    case PROP_UDP_TIMEOUT:
-      g_object_get_property (G_OBJECT (src->manager), "timeout", value);
+      gst_value_set_structure (value, src->priv->hdcp_param);
       break;
     case PROP_ENABLE_PAD_PROBE:
-      g_object_get_property (G_OBJECT (src->manager), "enable-pad-probe", value);
+      g_value_set_boolean (value, src->enable_pad_probe);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -747,46 +766,57 @@ gst_wfdrtspsrc_get_property (GObject * object, guint prop_id, GValue * value,
 }
 
 static void
-gst_wfdrtspsrc_cleanup (GstWFDRTSPSrc * src)
+gst_wfd_base_src_cleanup (GstWFDBaseSrc * src)
 {
-  GST_DEBUG_OBJECT (src, "cleanup");
+  GstWFDBaseSrcClass *klass = NULL;
+
+  klass = GST_WFD_BASE_SRC_GET_CLASS (src);
+
+  if (src->caps)
+    gst_caps_unref (src->caps);
+  src->caps = NULL;
+
+  if (klass->cleanup)
+  	klass->cleanup(src);
 }
 
 static void
-gst_wfdrtspsrc_flush (GstWFDRTSPSrc * src, gboolean flush)
+gst_wfd_base_src_flush (GstWFDBaseSrc * src, gboolean flush)
 {
+  GstWFDBaseSrcClass *klass;
   GstEvent *event;
-  gint cmd;
   GstState state;
+
+  klass = GST_WFD_BASE_SRC_GET_CLASS (src);
 
   if (flush) {
     event = gst_event_new_flush_start ();
     GST_DEBUG_OBJECT (src, "start flush");
-    cmd = CMD_WAIT;
     state = GST_STATE_PAUSED;
   } else {
     event = gst_event_new_flush_stop (FALSE);
     GST_DEBUG_OBJECT (src, "stop flush");
-    cmd = CMD_LOOP;
     state = GST_STATE_PLAYING;
   }
-  gst_wfdrtspsrc_push_event (src, event);
-  gst_wfdrtspsrc_loop_send_cmd (src, cmd);
 
-  wfd_rtsp_manager_set_state (src->manager, state);
+  if (klass->push_event)
+    klass->push_event(src, event);
+
+  if (klass->set_state)
+    klass->set_state (src, state);
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_connection_send (GstWFDRTSPSrc * src,
+gst_wfd_base_src_connection_send (GstWFDBaseSrc * src,
     GstRTSPMessage * message, GTimeVal * timeout)
 {
   GstRTSPResult ret = GST_RTSP_OK;
 
-  if (src->debug)
-    gst_wfdrtspsrc_message_dump (message);
+  if (src->priv->debug)
+    _rtsp_message_dump (message);
 
-  if (src->conninfo.connection)
-    ret = gst_rtsp_connection_send (src->conninfo.connection, message, timeout);
+  if (src->priv->conninfo.connection)
+    ret = gst_rtsp_connection_send (src->priv->conninfo.connection, message, timeout);
   else
     ret = GST_RTSP_ERROR;
 
@@ -794,24 +824,24 @@ gst_wfdrtspsrc_connection_send (GstWFDRTSPSrc * src,
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_connection_receive (GstWFDRTSPSrc * src,
+gst_wfd_base_src_connection_receive (GstWFDBaseSrc * src,
     GstRTSPMessage * message, GTimeVal * timeout)
 {
   GstRTSPResult ret;
 
-  if (src->conninfo.connection)
-    ret = gst_rtsp_connection_receive (src->conninfo.connection, message, timeout);
+  if (src->priv->conninfo.connection)
+    ret = gst_rtsp_connection_receive (src->priv->conninfo.connection, message, timeout);
   else
     ret = GST_RTSP_ERROR;
 
-  if (src->debug)
-    gst_wfdrtspsrc_message_dump (message);
+  if (src->priv->debug)
+    _rtsp_message_dump (message);
 
   return ret;
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_send_request (GstWFDRTSPSrc * src)
+gst_wfd_base_src_send_request (GstWFDBaseSrc * src)
 {
   GstWFDRequestParam request_param = {0};
   GstRTSPMessage request = { 0 };
@@ -836,11 +866,9 @@ gst_wfdrtspsrc_send_request (GstWFDRTSPSrc * src)
   GST_DEBUG_OBJECT (src, "need to send request message with %d parameter", request_param.type);
 
   res = gst_rtsp_message_init_request (&request, GST_RTSP_SET_PARAMETER,
-    src->conninfo.url_str);
+    src->priv->conninfo.url_str);
   if (res < 0)
     goto error;
-
-  gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
 
   /* Create set_parameter body to be sent in the request */
   WFDCONFIG_MESSAGE_NEW (&wfd_msg, error);
@@ -909,7 +937,7 @@ gst_wfdrtspsrc_send_request (GstWFDRTSPSrc * src)
 
   /* send request message  */
   GST_DEBUG_OBJECT (src, "send reuest...");
-  if ((res = gst_wfdrtspsrc_send (src, &request, &response,
+  if ((res = gst_wfd_base_src_send (src, &request, &response,
       NULL)) < 0)
     goto error;
 
@@ -931,14 +959,14 @@ error:
 }
 
 static gboolean
-gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * event)
+gst_wfd_base_src_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * event)
 {
-  GstWFDRTSPSrc *src;
+  GstWFDBaseSrc *src;
   gboolean res = TRUE;
   gboolean forward = FALSE;
   const GstStructure *s;
 
-  src = GST_WFDRTSPSRC_CAST (parent);
+  src = GST_WFD_BASE_SRC_CAST (parent);
   if(src == NULL)  {
     GST_ERROR_OBJECT (src, "src is NULL.");
     return FALSE;
@@ -959,7 +987,7 @@ gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * eve
         GST_OBJECT_LOCK(src);
         src->request_param.type = WFD_IDR_REQUEST;
         GST_OBJECT_UNLOCK(src);
-	 gst_wfdrtspsrc_loop_send_cmd(src, CMD_REQUEST);
+	 gst_wfd_base_src_loop_send_cmd(src, WFD_CMD_REQUEST, WFD_CMD_LOOP);
       }
       break;
     default:
@@ -985,12 +1013,12 @@ gst_wfdrtspsrc_handle_src_event (GstPad * pad, GstObject *parent, GstEvent * eve
 
 /* this query is executed on the ghost source pad exposed on manager. */
 static gboolean
-gst_wfdrtspsrc_handle_src_query (GstPad * pad, GstObject *parent, GstQuery * query)
+gst_wfd_base_src_handle_src_query (GstPad * pad, GstObject *parent, GstQuery * query)
 {
-  GstWFDRTSPSrc *src = NULL;
+  GstWFDBaseSrc *src = NULL;
   gboolean res = FALSE;
 
-  src = GST_WFDRTSPSRC_CAST (parent);
+  src = GST_WFD_BASE_SRC_CAST (parent);
   if(src == NULL)
   {
     GST_ERROR_OBJECT (src, "src is NULL.");
@@ -1003,10 +1031,10 @@ gst_wfdrtspsrc_handle_src_query (GstPad * pad, GstObject *parent, GstQuery * que
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_URI:
     {
-      if (src->conninfo.location == NULL) {
+      if (src->priv->conninfo.location == NULL) {
         res = FALSE;
       } else {
-        gst_query_set_uri( query, src->conninfo.location);
+        gst_query_set_uri( query, src->priv->conninfo.location);
         res = TRUE;
       }
       break;
@@ -1028,102 +1056,41 @@ gst_wfdrtspsrc_handle_src_query (GstPad * pad, GstObject *parent, GstQuery * que
 }
 
 static void
-gst_wfdrtspsrc_configure_caps (GstWFDRTSPSrc * src)
+gst_wfd_base_src_configure_caps (GstWFDBaseSrc * src)
 {
-  WFDRTSPManager *manager = src->manager;;
+  GstWFDBaseSrcPrivate *priv = src->priv;
   GstCaps *caps;
-  guint64 start, stop;
-  gdouble play_speed, play_scale;
   GstStructure *structure;
 
-  GST_DEBUG_OBJECT (src, "configuring manager caps");
+  GST_DEBUG_OBJECT (src, "configuring caps");
 
-  start = 0;
-  stop = GST_CLOCK_TIME_NONE;
-  play_speed = 1.000;
-  play_scale = 1.000;
-
-  if ((caps = manager->caps)) {
+  if ((caps = src->caps)) {
     caps = gst_caps_make_writable (caps);
     structure = gst_caps_get_structure (caps, 0);
     /* update caps */
-    if (manager->timebase != GST_CLOCK_TIME_NONE)
-      gst_structure_set (structure, "clock-base", G_TYPE_UINT,
-          (guint) manager->timebase, NULL);
-    if (manager->seqbase != GST_CLOCK_TIME_NONE)
-      gst_structure_set (structure, "seqnum-base", G_TYPE_UINT,
-          (guint) manager->seqbase, NULL);
-    gst_structure_set (structure, "npt-start", G_TYPE_UINT64, start, NULL);
+    gst_structure_set (structure, "height", G_TYPE_INT, priv->video_height, NULL);
+    gst_structure_set (structure, "width", G_TYPE_INT, priv->video_width, NULL);
+    gst_structure_set (structure, "video-framerate", G_TYPE_INT, priv->video_framerate, NULL);
 
-    if (stop != GST_CLOCK_TIME_NONE)
-      gst_structure_set (structure, "npt-stop", G_TYPE_UINT64, stop, NULL);
-    gst_structure_set (structure, "play-speed", G_TYPE_DOUBLE, play_speed, NULL);
-    gst_structure_set (structure, "play-scale", G_TYPE_DOUBLE, play_scale, NULL);
-    gst_structure_set (structure, "height", G_TYPE_INT, src->video_height, NULL);
-    gst_structure_set (structure, "width", G_TYPE_INT, src->video_width, NULL);
-    gst_structure_set (structure, "video-framerate", G_TYPE_INT, src->video_framerate, NULL);
-
-    GST_DEBUG_OBJECT(src, "Frame rate : %d", src->video_framerate);
-
-    manager->caps = caps;
-
-#ifdef _SET_FRAMERATE_TO_CAPS
-    /* Set caps to udpsrc */
-    GstCaps *udp_caps = NULL;
-    GstStructure *s = NULL;
-    g_object_get(manager->udpsrc[0], "caps", &udp_caps, NULL);
-    udp_caps = gst_caps_make_writable (udp_caps);
-    s = gst_caps_get_structure (udp_caps, 0);
-    gst_structure_set (s, "npt-start", G_TYPE_UINT64, start, NULL);
-    gst_structure_set (s, "npt-stop", G_TYPE_UINT64, stop, NULL);
-    gst_structure_set (s, "play-speed", G_TYPE_DOUBLE, play_speed, NULL);
-    gst_structure_set (s, "play-scale", G_TYPE_DOUBLE, play_scale, NULL);
-    gst_structure_set (s, "width", G_TYPE_INT, src->video_width, NULL);
-    gst_structure_set (s, "height", G_TYPE_INT, src->video_height, NULL);
-    gst_structure_set (s, "video-framerate", G_TYPE_INT, src->video_framerate, NULL);
-    g_object_set(manager->udpsrc[0], "caps", udp_caps, NULL);
-#endif
+    src->caps = caps;
   }
-  GST_DEBUG_OBJECT (src, "manager %p, caps %" GST_PTR_FORMAT, manager, caps);
 
-  if (manager->srcpad) {
+  if (src->srcpad) {
     GST_DEBUG_OBJECT (src, "set caps for srcpad");
-    gst_pad_set_caps(manager->srcpad, manager->caps);
+    gst_pad_set_caps(src->srcpad, src->caps);
   }
 }
 
 static gboolean
-gst_wfdrtspsrc_push_event (GstWFDRTSPSrc * src, GstEvent * event)
+gst_wfd_base_src_push_event (GstWFDBaseSrc * src, GstEvent * event)
 {
-  WFDRTSPManager * manager;
   gboolean res = TRUE;
 
   g_return_val_if_fail(GST_IS_EVENT(event), FALSE);
 
-  manager = src->manager;
-
-  gst_event_ref (event);
-
-  if (manager->udpsrc[0]) {
+  if (src ->srcpad) {
     gst_event_ref (event);
-    res = gst_element_send_event (manager->udpsrc[0], event);
-  } else if (manager->channelpad[0]) {
-    gst_event_ref (event);
-    if (GST_PAD_IS_SRC (manager->channelpad[0]))
-      res = gst_pad_push_event (manager->channelpad[0], event);
-    else
-      res = gst_pad_send_event (manager->channelpad[0], event);
-  }
-
-  if (manager->udpsrc[1]) {
-    gst_event_ref (event);
-    res &= gst_element_send_event (manager->udpsrc[1], event);
-  } else if (manager->channelpad[1]) {
-    gst_event_ref (event);
-    if (GST_PAD_IS_SRC (manager->channelpad[1]))
-      res &= gst_pad_push_event (manager->channelpad[1], event);
-    else
-      res &= gst_pad_send_event (manager->channelpad[1], event);
+    res = gst_pad_push_event (src ->srcpad, event);
   }
 
   gst_event_unref (event);
@@ -1132,8 +1099,9 @@ gst_wfdrtspsrc_push_event (GstWFDRTSPSrc * src, GstEvent * event)
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_conninfo_connect (GstWFDRTSPSrc * src, GstWFDRTSPConnInfo * info)
+gst_wfd_base_src_conninfo_connect (GstWFDBaseSrc * src, GstWFDConnInfo * info)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
   GstRTSPResult res;
 
   if (info->connection == NULL) {
@@ -1160,15 +1128,15 @@ gst_wfdrtspsrc_conninfo_connect (GstWFDRTSPSrc * src, GstWFDRTSPConnInfo * info)
     GST_DEBUG_OBJECT (src, "connecting (%s)...", info->location);
     int retry = 0;
 connect_retry:
-    if (src->do_stop) {
+    if (priv->do_stop) {
       GST_ERROR_OBJECT (src, "stop connecting....");
       return GST_RTSP_EINTR;
     }
 
     if ((res =
             gst_rtsp_connection_connect (info->connection,
-                src->ptcp_timeout)) < 0) {
-      if (retry < src->retry) {
+                priv->ptcp_timeout)) < 0) {
+      if (retry < priv->retry) {
         GST_ERROR_OBJECT(src, "Connection failed... Try again...");
         usleep(100000);
         retry++;
@@ -1207,11 +1175,12 @@ could_not_connect:
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_conninfo_close (GstWFDRTSPSrc * src, GstWFDRTSPConnInfo * info,
+gst_wfd_base_src_conninfo_close (GstWFDBaseSrc * src, GstWFDConnInfo * info,
     gboolean free)
 {
   g_return_val_if_fail (info, GST_RTSP_EINVAL);
 
+  GST_WFD_BASE_STATE_LOCK (src);
   if (info->connected) {
     GST_DEBUG_OBJECT (src, "closing connection...");
     gst_rtsp_connection_close (info->connection);
@@ -1223,30 +1192,27 @@ gst_wfdrtspsrc_conninfo_close (GstWFDRTSPSrc * src, GstWFDRTSPConnInfo * info,
     gst_rtsp_connection_free (info->connection);
     info->connection = NULL;
   }
+  GST_WFD_BASE_STATE_UNLOCK (src);
   return GST_RTSP_OK;
 }
 
 static void
-gst_wfdrtspsrc_connection_flush (GstWFDRTSPSrc * src, gboolean flush)
+gst_wfd_base_src_connection_flush (GstWFDBaseSrc * src, gboolean flush)
 {
   GST_DEBUG_OBJECT (src, "set flushing %d", flush);
-  if (src->conninfo.connection) {
+  GST_WFD_BASE_STATE_LOCK (src);
+  if (src->priv->conninfo.connection) {
     GST_DEBUG_OBJECT (src, "connection flush %d", flush);
-    gst_rtsp_connection_flush (src->conninfo.connection, flush);
+    gst_rtsp_connection_flush (src->priv->conninfo.connection, flush);
   }
-
-  if (src->manager) {
-    WFDRTSPManager *manager = src->manager;
-    GST_DEBUG_OBJECT (src, "manager %p flush %d", manager, flush);
-    if (manager->conninfo.connection)
-      gst_rtsp_connection_flush (manager->conninfo.connection, flush);
-  }
-  GST_DEBUG_OBJECT (src, "flushing %d is done", flush);
+  GST_WFD_BASE_STATE_UNLOCK (src);
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
+gst_wfd_base_src_handle_request (GstWFDBaseSrc * src, GstRTSPMessage * request)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
+  GstWFDBaseSrcClass *klass = NULL;
   GstRTSPMethod method = GST_RTSP_INVALID;
   GstRTSPVersion version = GST_RTSP_VERSION_INVALID;
   GstRTSPMessage response = { 0 };
@@ -1256,6 +1222,8 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
   guint8 *data = NULL;
   guint size = 0;
   WFDMessage *wfd_msg = NULL;
+
+  klass = GST_WFD_BASE_SRC_GET_CLASS (src);
 
   res = gst_rtsp_message_parse_request (request, &method, &uristr, &version);
   if (res < 0)
@@ -1306,7 +1274,7 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
        goto send_error;
       }
       gst_rtsp_message_add_header (&response, GST_RTSP_HDR_PUBLIC, options_str);
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
+      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, (const gchar*)priv->user_agent);
       g_free (options_str);
 
       break;
@@ -1323,7 +1291,6 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
         goto send_error;
 
       gst_rtsp_message_add_header (&response, GST_RTSP_HDR_CONTENT_TYPE, "text/parameters");
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
 
       res = gst_rtsp_message_get_body (request, &data, &size);
       if (res < 0)
@@ -1335,7 +1302,7 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
          *   A WFD source indicates the timeout value via the "Session:" line in the RTSP M6 response.
          *   A WFD sink shall respond with an RTSP M16 request message upon successful receiving the RTSP M16 request message.
          */
-        res = gst_rtsp_connection_reset_timeout (src->conninfo.connection);
+        res = gst_rtsp_connection_reset_timeout (priv->conninfo.connection);
         if (res < 0)
           goto send_error;
         break;
@@ -1345,6 +1312,9 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
       WFDCONFIG_MESSAGE_INIT(wfd_msg, message_config_error);
       WFDCONFIG_MESSAGE_PARSE_BUFFER(data, size, wfd_msg, message_config_error);
       WFDCONFIG_MESSAGE_DUMP(wfd_msg);
+
+      if (!wfd_msg)
+        goto message_config_error;
 
       /* Note : RTSP M3 :
        *   The WFD source shall send RTSP M3 request to the WFD sink to query the WFD sink's attributes and capabilities.
@@ -1363,15 +1333,16 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
         guint audio_channels = 0;
         guint audio_latency = 0;
 
-        if(src->audio_param != NULL) {
-          if (gst_structure_has_field (src->audio_param, "audio_codec"))
-            gst_structure_get_uint (src->audio_param, "audio_codec", &audio_codec);
-          if (gst_structure_has_field (src->audio_param, "audio_latency"))
-            gst_structure_get_uint (src->audio_param, "audio_latency", &audio_latency);
-          if (gst_structure_has_field (src->audio_param, "audio_channels"))
-            gst_structure_get_uint (src->audio_param, "audio_channels", &audio_channels);
-          if (gst_structure_has_field (src->audio_param, "audio_sampling_frequency"))
-            gst_structure_get_uint (src->audio_param, "audio_sampling_frequency", &audio_sampling_frequency);
+        if(priv->audio_param != NULL) {
+          GstStructure *audio_param = priv->audio_param;
+          if (gst_structure_has_field (audio_param, "audio_codec"))
+            gst_structure_get_uint (audio_param, "audio_codec", &audio_codec);
+          if (gst_structure_has_field (audio_param, "audio_latency"))
+            gst_structure_get_uint (audio_param, "audio_latency", &audio_latency);
+          if (gst_structure_has_field (audio_param, "audio_channels"))
+            gst_structure_get_uint (audio_param, "audio_channels", &audio_channels);
+          if (gst_structure_has_field (audio_param, "audio_sampling_frequency"))
+            gst_structure_get_uint (audio_param, "audio_sampling_frequency", &audio_sampling_frequency);
         }
 
         WFDCONFIG_SET_SUPPORTED_AUDIO_FORMAT(wfd_msg,
@@ -1403,33 +1374,35 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
         gint video_slice_enc_param = 0;
         gint video_framerate_control_support = 0;
 
-        if (src->video_param != NULL) {
-          if (gst_structure_has_field (src->video_param, "video_codec"))
-            gst_structure_get_uint (src->video_param, "video_codec", &video_codec);
-          if (gst_structure_has_field (src->video_param, "video_native_resolution"))
-            gst_structure_get_uint (src->video_param, "video_native_resolution", &video_native_resolution);
-          if (gst_structure_has_field (src->video_param, "video_cea_support"))
-            gst_structure_get_uint (src->video_param, "video_cea_support", &video_cea_support);
-          if (gst_structure_has_field (src->video_param, "video_vesa_support"))
-            gst_structure_get_uint (src->video_param, "video_vesa_support", &video_vesa_support);
-          if (gst_structure_has_field (src->video_param, "video_hh_support"))
-            gst_structure_get_uint (src->video_param, "video_hh_support", &video_hh_support);
-          if (gst_structure_has_field (src->video_param, "video_profile"))
-            gst_structure_get_uint (src->video_param, "video_profile", &video_profile);
-          if (gst_structure_has_field (src->video_param, "video_level"))
-            gst_structure_get_uint (src->video_param, "video_level", &video_level);
-          if (gst_structure_has_field (src->video_param, "video_latency"))
-            gst_structure_get_uint (src->video_param, "video_latency", &video_latency);
-          if (gst_structure_has_field (src->video_param, "video_vertical_resolution"))
-            gst_structure_get_int (src->video_param, "video_vertical_resolution", &video_vertical_resolution);
-          if (gst_structure_has_field (src->video_param, "video_horizontal_resolution"))
-            gst_structure_get_int (src->video_param, "video_horizontal_resolution", &video_horizontal_resolution);
-          if (gst_structure_has_field (src->video_param, "video_minimum_slicing"))
-            gst_structure_get_int (src->video_param, "video_minimum_slicing", &video_minimum_slicing);
-          if (gst_structure_has_field (src->video_param, "video_slice_enc_param"))
-            gst_structure_get_int (src->video_param, "video_slice_enc_param", &video_slice_enc_param);
-          if (gst_structure_has_field (src->video_param, "video_framerate_control_support"))
-            gst_structure_get_int (src->video_param, "video_framerate_control_support", &video_framerate_control_support);
+        if (priv->video_param != NULL) {
+          GstStructure *video_param = priv->video_param;
+
+          if (gst_structure_has_field (video_param, "video_codec"))
+            gst_structure_get_uint (video_param, "video_codec", &video_codec);
+          if (gst_structure_has_field (video_param, "video_native_resolution"))
+            gst_structure_get_uint (video_param, "video_native_resolution", &video_native_resolution);
+          if (gst_structure_has_field (video_param, "video_cea_support"))
+            gst_structure_get_uint (video_param, "video_cea_support", &video_cea_support);
+          if (gst_structure_has_field (video_param, "video_vesa_support"))
+            gst_structure_get_uint (video_param, "video_vesa_support", &video_vesa_support);
+          if (gst_structure_has_field (video_param, "video_hh_support"))
+            gst_structure_get_uint (video_param, "video_hh_support", &video_hh_support);
+          if (gst_structure_has_field (video_param, "video_profile"))
+            gst_structure_get_uint (video_param, "video_profile", &video_profile);
+          if (gst_structure_has_field (video_param, "video_level"))
+            gst_structure_get_uint (video_param, "video_level", &video_level);
+          if (gst_structure_has_field (video_param, "video_latency"))
+            gst_structure_get_uint (video_param, "video_latency", &video_latency);
+          if (gst_structure_has_field (video_param, "video_vertical_resolution"))
+            gst_structure_get_int (video_param, "video_vertical_resolution", &video_vertical_resolution);
+          if (gst_structure_has_field (video_param, "video_horizontal_resolution"))
+            gst_structure_get_int (video_param, "video_horizontal_resolution", &video_horizontal_resolution);
+          if (gst_structure_has_field (video_param, "video_minimum_slicing"))
+            gst_structure_get_int (video_param, "video_minimum_slicing", &video_minimum_slicing);
+          if (gst_structure_has_field (video_param, "video_slice_enc_param"))
+            gst_structure_get_int (video_param, "video_slice_enc_param", &video_slice_enc_param);
+          if (gst_structure_has_field (video_param, "video_framerate_control_support"))
+            gst_structure_get_int (video_param, "video_framerate_control_support", &video_framerate_control_support);
         }
 
         WFDCONFIG_SET_SUPPORTED_VIDEO_FORMAT(wfd_msg,
@@ -1466,11 +1439,13 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
         gint hdcp_version = 0;
         gint hdcp_port_no = 0;
 
-        if (src->hdcp_param != NULL) {
-          if (gst_structure_has_field (src->hdcp_param, "hdcp_version"))
-            gst_structure_get_int (src->hdcp_param, "hdcp_version", &hdcp_version);
-          if (gst_structure_has_field (src->hdcp_param, "hdcp_port_no"))
-            gst_structure_get_int (src->hdcp_param, "hdcp_port_no", &hdcp_port_no);
+        if (priv->hdcp_param != NULL) {
+          GstStructure *hdcp_param = priv->hdcp_param;
+
+          if (gst_structure_has_field (hdcp_param, "hdcp_version"))
+            gst_structure_get_int (hdcp_param, "hdcp_version", &hdcp_version);
+          if (gst_structure_has_field (hdcp_param, "hdcp_port_no"))
+            gst_structure_get_int (hdcp_param, "hdcp_port_no", &hdcp_port_no);
         }
 
         WFDCONFIG_SET_CONTENT_PROTECTION_TYPE(wfd_msg,
@@ -1514,15 +1489,14 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
        */
       if(wfd_msg->client_rtp_ports) {
         /* Hardcoded as of now. This is to comply with dongle port settings.
-        This should be derived from gst_wfdrtspsrc_alloc_udp_ports */
-        src->primary_rtpport = 19000;
-        src->secondary_rtpport = 0;
+        This should be derived from gst_wfd_base_src_alloc_udp_ports */
+        priv->primary_rtpport = 19000;
         WFDCONFIG_SET_PREFERD_RTP_PORT(wfd_msg,
           WFD_RTSP_TRANS_RTP,
           WFD_RTSP_PROFILE_AVP,
           WFD_RTSP_LOWER_TRANS_UDP,
-          src->primary_rtpport,
-          src->secondary_rtpport,
+          priv->primary_rtpport,
+          0,
           message_config_error);
       }
 
@@ -1568,6 +1542,12 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
       if (res < 0)
         goto send_error;
 
+      if (klass->handle_get_parameter) {
+        GST_DEBUG_OBJECT(src, "try to handle more GET_PARAMETER parameter");
+        res = klass->handle_get_parameter(src, request, &response);
+        if (res < 0)
+          goto send_error;
+      }
       break;
     }
 
@@ -1576,8 +1556,6 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
       res = gst_rtsp_message_init_response (&response, GST_RTSP_STS_OK, gst_rtsp_status_as_text (GST_RTSP_STS_OK), request);
       if (res < 0)
         goto send_error;
-
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
 
       res = gst_rtsp_message_get_body (request, &data, &size);
       if (res < 0)
@@ -1601,23 +1579,23 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
 
         WFDCONFIG_GET_TRIGGER_TYPE(wfd_msg, &trigger, message_config_error);
 
-        res = gst_wfdrtspsrc_connection_send (src, &response, NULL);
+        res = gst_wfd_base_src_connection_send (src, &response, NULL);
         if (res < 0)
           goto send_error;
 
         GST_DEBUG_OBJECT (src, "got trigger method for %s", GST_STR_NULL(wfd_msg->trigger_method->wfd_trigger_method));
         switch(trigger) {
           case WFD_TRIGGER_PAUSE:
-            gst_wfdrtspsrc_loop_send_cmd (src, CMD_PAUSE);
+            gst_wfd_base_src_loop_send_cmd (src, WFD_CMD_PAUSE, WFD_CMD_LOOP);
             break;
           case WFD_TRIGGER_PLAY:
-            gst_wfdrtspsrc_loop_send_cmd (src, CMD_PLAY);
+            gst_wfd_base_src_loop_send_cmd (src, WFD_CMD_PLAY, WFD_CMD_LOOP);
             break;
           case WFD_TRIGGER_TEARDOWN:
-            gst_wfdrtspsrc_loop_send_cmd (src, CMD_CLOSE);
+            gst_wfd_base_src_loop_send_cmd (src, WFD_CMD_CLOSE, WFD_CMD_ALL);
             break;
           case WFD_TRIGGER_SETUP:
-            if (!gst_wfdrtspsrc_setup (src))
+            if (!gst_wfd_base_src_setup (src))
               goto setup_failed;
             break;
           default:
@@ -1630,38 +1608,37 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
         GstStructure *stream_info = gst_structure_new ("WFDStreamInfo", NULL, NULL);
 
         if(wfd_msg->audio_codecs) {
-          res = gst_wfdrtspsrc_get_audio_parameter(src, wfd_msg);
+          res = gst_wfd_base_src_get_audio_parameter(src, wfd_msg);
           if(res != GST_RTSP_OK) {
             goto message_config_error;
           }
 
           gst_structure_set (stream_info,
-              "audio_format", G_TYPE_STRING, src->audio_format,
-              "audio_channels", G_TYPE_INT, src->audio_channels,
-              "audio_rate", G_TYPE_INT, src->audio_frequency,
-              "audio_bitwidth", G_TYPE_INT, src->audio_bitwidth/16,
+              "audio_format", G_TYPE_STRING, priv->audio_format,
+              "audio_channels", G_TYPE_INT, priv->audio_channels,
+              "audio_rate", G_TYPE_INT, priv->audio_frequency,
+              "audio_bitwidth", G_TYPE_INT, priv->audio_bitwidth/16,
               NULL);
         }
 
         if(wfd_msg->video_formats) {
-          res = gst_wfdrtspsrc_get_video_parameter(src, wfd_msg);
+          res = gst_wfd_base_src_get_video_parameter(src, wfd_msg);
           if(res != GST_RTSP_OK) {
             goto message_config_error;
           }
 
           gst_structure_set (stream_info,
               "video_format", G_TYPE_STRING, "H264",
-              "video_width", G_TYPE_INT, src->video_width,
-              "video_height", G_TYPE_INT, src->video_height,
-              "video_framerate", G_TYPE_INT, src->video_framerate,
+              "video_width", G_TYPE_INT, priv->video_width,
+              "video_height", G_TYPE_INT, priv->video_height,
+              "video_framerate", G_TYPE_INT, priv->video_framerate,
               NULL);
         }
 
         if(wfd_msg->video_3d_formats) {
         /* TO DO */
         }
-
-        g_signal_emit (src, gst_wfdrtspsrc_signals[SIGNAL_UPDATE_MEDIA_INFO], 0, stream_info);
+        g_signal_emit (src, gst_wfd_base_src_signals[SIGNAL_UPDATE_MEDIA_INFO], 0, stream_info);
       }
 
       /* Note : wfd-presentation-url :
@@ -1673,8 +1650,8 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
 
         WFDCONFIG_GET_PRESENTATION_URL(wfd_msg, &url0, &url1, message_config_error);
 
-        g_free (src->conninfo.location);
-        src->conninfo.location = g_strdup (url0);
+        g_free (priv->conninfo.location);
+        priv->conninfo.location = g_strdup (url0);
         /* url1 is ignored as of now */
       }
 
@@ -1709,14 +1686,14 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
 
         WFDCONFIG_GET_AV_FORMAT_CHANGE_TIMING(wfd_msg, &pts, &dts, message_config_error);
 
-        if (src->state == GST_RTSP_STATE_PLAYING) {
+        if (priv->state == GST_RTSP_STATE_PLAYING) {
           GST_DEBUG_OBJECT(src, "change format with PTS[%lld] and DTS[%lld]", pts, dts);
 
-          g_signal_emit (src, gst_wfdrtspsrc_signals[SIGNAL_AV_FORMAT_CHANGE], 0, (gpointer)&need_to_flush);
+          g_signal_emit (src, gst_wfd_base_src_signals[SIGNAL_AV_FORMAT_CHANGE], 0, (gpointer)&need_to_flush);
 
           if (need_to_flush) {
-            gst_wfdrtspsrc_flush(src,TRUE);
-            gst_wfdrtspsrc_flush(src, FALSE);
+            gst_wfd_base_src_flush(src,TRUE);
+            gst_wfd_base_src_flush(src, FALSE);
           }
         }
       }
@@ -1742,6 +1719,13 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
 
         GST_DEBUG_OBJECT (src, "wfd source is entering standby mode");
       }
+
+      if (klass->handle_set_parameter) {
+        GST_DEBUG_OBJECT(src, "try to handle more SET_PARAMETER parameter");
+        res = klass->handle_set_parameter(src, request, &response);
+        if (res < 0)
+          goto send_error;
+      }
       break;
     }
 
@@ -1751,13 +1735,11 @@ gst_wfdrtspsrc_handle_request (GstWFDRTSPSrc * src, GstRTSPMessage * request)
       if (res < 0)
         goto send_error;
 
-      gst_rtsp_message_add_header (&response, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
-
       break;
     }
   }
 
-  res = gst_wfdrtspsrc_connection_send (src, &response, src->ptcp_timeout);
+  res = gst_wfd_base_src_connection_send (src, &response, priv->ptcp_timeout);
   if (res < 0)
     goto send_error;
 
@@ -1796,21 +1778,21 @@ send_error:
 }
 
 static void
-gst_wfdrtspsrc_loop_start_cmd (GstWFDRTSPSrc * src, gint cmd)
+gst_wfd_base_src_loop_start_cmd (GstWFDBaseSrc * src, gint cmd)
 {
-  GST_DEBUG_OBJECT (src, "start cmd %d", cmd);
+  GST_DEBUG_OBJECT (src, "start cmd %s", _cmd_to_string(cmd));
 
   switch (cmd) {
-    case CMD_OPEN:
+    case WFD_CMD_OPEN:
       GST_ELEMENT_PROGRESS (src, START, "open", ("Opening Stream"));
       break;
-    case CMD_PLAY:
+    case WFD_CMD_PLAY:
       GST_ELEMENT_PROGRESS (src, START, "play", ("Sending PLAY request"));
       break;
-    case CMD_PAUSE:
+    case WFD_CMD_PAUSE:
       GST_ELEMENT_PROGRESS (src, START, "pause", ("Sending PAUSE request"));
       break;
-    case CMD_CLOSE:
+    case WFD_CMD_CLOSE:
       GST_ELEMENT_PROGRESS (src, START, "close", ("Closing Stream"));
       break;
     default:
@@ -1819,21 +1801,21 @@ gst_wfdrtspsrc_loop_start_cmd (GstWFDRTSPSrc * src, gint cmd)
 }
 
 static void
-gst_wfdrtspsrc_loop_complete_cmd (GstWFDRTSPSrc * src, gint cmd)
+gst_wfd_base_src_loop_complete_cmd (GstWFDBaseSrc * src, gint cmd)
 {
-  GST_DEBUG_OBJECT (src, "complete cmd %d", cmd);
+  GST_DEBUG_OBJECT (src, "complete cmd %s", _cmd_to_string(cmd));
 
   switch (cmd) {
-    case CMD_OPEN:
+    case WFD_CMD_OPEN:
       GST_ELEMENT_PROGRESS (src, COMPLETE, "open", ("Opened Stream"));
       break;
-    case CMD_PLAY:
+    case WFD_CMD_PLAY:
       GST_ELEMENT_PROGRESS (src, COMPLETE, "play", ("Sent PLAY request"));
       break;
-    case CMD_PAUSE:
+    case WFD_CMD_PAUSE:
       GST_ELEMENT_PROGRESS (src, COMPLETE, "pause", ("Sent PAUSE request"));
       break;
-    case CMD_CLOSE:
+    case WFD_CMD_CLOSE:
       GST_ELEMENT_PROGRESS (src, COMPLETE, "close", ("Closed Stream"));
       break;
     default:
@@ -1842,21 +1824,21 @@ gst_wfdrtspsrc_loop_complete_cmd (GstWFDRTSPSrc * src, gint cmd)
 }
 
 static void
-gst_wfdrtspsrc_loop_cancel_cmd (GstWFDRTSPSrc * src, gint cmd)
+gst_wfd_base_src_loop_cancel_cmd (GstWFDBaseSrc * src, gint cmd)
 {
-  GST_DEBUG_OBJECT (src, "cancel cmd %d", cmd);
+  GST_DEBUG_OBJECT (src, "cancel cmd %s", _cmd_to_string(cmd));
 
   switch (cmd) {
-    case CMD_OPEN:
+    case WFD_CMD_OPEN:
       GST_ELEMENT_PROGRESS (src, CANCELED, "open", ("Open canceled"));
       break;
-    case CMD_PLAY:
+    case WFD_CMD_PLAY:
       GST_ELEMENT_PROGRESS (src, CANCELED, "play", ("PLAY canceled"));
       break;
-    case CMD_PAUSE:
+    case WFD_CMD_PAUSE:
       GST_ELEMENT_PROGRESS (src, CANCELED, "pause", ("PAUSE canceled"));
       break;
-    case CMD_CLOSE:
+    case WFD_CMD_CLOSE:
       GST_ELEMENT_PROGRESS (src, CANCELED, "close", ("Close canceled"));
       break;
     default:
@@ -1865,21 +1847,21 @@ gst_wfdrtspsrc_loop_cancel_cmd (GstWFDRTSPSrc * src, gint cmd)
 }
 
 static void
-gst_wfdrtspsrc_loop_error_cmd (GstWFDRTSPSrc * src, gint cmd)
+gst_wfd_base_src_loop_error_cmd (GstWFDBaseSrc * src, gint cmd)
 {
-  GST_DEBUG_OBJECT (src, "error cmd %d", cmd);
+  GST_DEBUG_OBJECT (src, "error cmd %s", _cmd_to_string(cmd));
 
   switch (cmd) {
-    case CMD_OPEN:
+    case WFD_CMD_OPEN:
       GST_ELEMENT_PROGRESS (src, ERROR, "open", ("Open failed"));
       break;
-    case CMD_PLAY:
+    case WFD_CMD_PLAY:
       GST_ELEMENT_PROGRESS (src, ERROR, "play", ("PLAY failed"));
       break;
-    case CMD_PAUSE:
+    case WFD_CMD_PAUSE:
       GST_ELEMENT_PROGRESS (src, ERROR, "pause", ("PAUSE failed"));
       break;
-    case CMD_CLOSE:
+    case WFD_CMD_CLOSE:
       GST_ELEMENT_PROGRESS (src, ERROR, "close", ("Close failed"));
       break;
     default:
@@ -1888,67 +1870,74 @@ gst_wfdrtspsrc_loop_error_cmd (GstWFDRTSPSrc * src, gint cmd)
 }
 
 static void
-gst_wfdrtspsrc_loop_end_cmd (GstWFDRTSPSrc * src, gint cmd, GstRTSPResult ret)
+gst_wfd_base_src_loop_end_cmd (GstWFDBaseSrc * src, gint cmd, GstRTSPResult ret)
 {
-  GST_DEBUG_OBJECT (src, "end cmd %d", cmd);
+  GST_DEBUG_OBJECT (src, "end cmd %s", _cmd_to_string(cmd));
 
   if (ret == GST_RTSP_OK)
-    gst_wfdrtspsrc_loop_complete_cmd (src, cmd);
+    gst_wfd_base_src_loop_complete_cmd (src, cmd);
   else if (ret == GST_RTSP_EINTR)
-    gst_wfdrtspsrc_loop_cancel_cmd (src, cmd);
+    gst_wfd_base_src_loop_cancel_cmd (src, cmd);
   else
-    gst_wfdrtspsrc_loop_error_cmd (src, cmd);
-}
-
-static void
-gst_wfdrtspsrc_loop_send_cmd (GstWFDRTSPSrc * src, gint cmd)
-{
-  gint old;
-
-  /* start new request */
-  gst_wfdrtspsrc_loop_start_cmd (src, cmd);
-
-  GST_OBJECT_LOCK (src);
-
-  GST_DEBUG_OBJECT (src, "sending cmd %d", cmd);
-
-  old = src->loop_cmd;
-  if (old != CMD_WAIT) {
-    src->loop_cmd = CMD_WAIT;
-    GST_OBJECT_UNLOCK (src);
-    /* cancel previous request */
-    gst_wfdrtspsrc_loop_cancel_cmd (src, old);
-    GST_OBJECT_LOCK (src);
-  }
-  src->loop_cmd = cmd;
-
-  /* interrupt if allowed */
-  if (src->waiting) {
-    GST_DEBUG_OBJECT (src, "start connection flush");
-    gst_wfdrtspsrc_connection_flush (src, TRUE);
-  }
-
-  if (src->task)
-    gst_task_start (src->task);
-
-  GST_OBJECT_UNLOCK (src);
+    gst_wfd_base_src_loop_error_cmd (src, cmd);
 }
 
 static gboolean
-gst_wfdrtspsrc_loop (GstWFDRTSPSrc * src)
+gst_wfd_base_src_loop_send_cmd (GstWFDBaseSrc * src, gint cmd, gint mask)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
+  gboolean flushed = FALSE;
+  gint old;
+
+  /* start new request */
+  gst_wfd_base_src_loop_start_cmd (src, cmd);
+
+  GST_DEBUG_OBJECT (src, "sending cmd %s", _cmd_to_string(cmd));
+
+  GST_OBJECT_LOCK (src);
+  old = priv->pending_cmd;
+  if (old != WFD_CMD_WAIT) {
+    priv->pending_cmd = WFD_CMD_WAIT;
+    GST_OBJECT_UNLOCK (src);
+    /* cancel previous request */
+    GST_DEBUG_OBJECT (src, "cancel previous request %s", _cmd_to_string (old));
+    gst_wfd_base_src_loop_cancel_cmd (src, old);
+    GST_OBJECT_LOCK (src);
+  }
+  priv->pending_cmd = cmd;
+  /* interrupt if allowed */
+  if (priv->busy_cmd & mask) {
+    GST_DEBUG_OBJECT (src, "connection flush busy %s",
+        _cmd_to_string (priv->busy_cmd));
+    gst_wfd_base_src_connection_flush (src, TRUE);
+    flushed = TRUE;
+  } else {
+    GST_DEBUG_OBJECT (src, "not interrupting busy cmd %s",
+        _cmd_to_string (priv->busy_cmd));
+  }
+
+  if (priv->task)
+    gst_task_start (priv->task);
+  GST_OBJECT_UNLOCK (src);
+
+  return flushed;
+}
+
+static GstRTSPResult
+gst_wfd_base_src_loop (GstWFDBaseSrc * src)
+{
+  GstWFDBaseSrcPrivate *priv = src->priv;
   GstRTSPResult res = GST_RTSP_OK;
-  GstFlowReturn ret = GST_FLOW_OK;
   GstRTSPMessage message = { 0 };
 
-  if (!src->conninfo.connection || !src->conninfo.connected)
+  if (!priv->conninfo.connection || !priv->conninfo.connected)
     goto no_connection;
 
   while (TRUE) {
     GTimeVal tv_timeout;
 
     /* get the next timeout interval */
-    gst_rtsp_connection_next_timeout (src->conninfo.connection, &tv_timeout);
+    gst_rtsp_connection_next_timeout (priv->conninfo.connection, &tv_timeout);
 
     GST_DEBUG_OBJECT (src, "doing receive with timeout %d seconds",
         (gint) tv_timeout.tv_sec);
@@ -1956,9 +1945,8 @@ gst_wfdrtspsrc_loop (GstWFDRTSPSrc * src)
     gst_rtsp_message_unset (&message);
 
     /* we should continue reading the TCP socket because the server might
-     * send us requests. When the session timeout expires, we need to send a
-     * keep-alive request to keep the session open. */
-    res = gst_wfdrtspsrc_connection_receive (src, &message, &tv_timeout);
+     * send us requests. */
+    res = gst_wfd_base_src_connection_receive (src, &message, &tv_timeout);
 
     switch (res) {
       case GST_RTSP_OK:
@@ -1982,7 +1970,7 @@ gst_wfdrtspsrc_loop (GstWFDRTSPSrc * src)
     switch (message.type) {
       case GST_RTSP_MESSAGE_REQUEST:
         /* server sends us a request message, handle it */
-        res = gst_wfdrtspsrc_handle_request(src, &message);
+        res = gst_wfd_base_src_handle_request(src, &message);
         if (res == GST_RTSP_EEOF)
           goto server_eof;
         else if (res < 0)
@@ -2004,12 +1992,12 @@ gst_wfdrtspsrc_loop (GstWFDRTSPSrc * src)
   }
   g_assert_not_reached ();
 
-  return TRUE;
+  return res;
 
 no_connection:
   {
+    res = GST_RTSP_ERROR;
     GST_ERROR_OBJECT (src, "we are not connected");
-    ret = GST_FLOW_FLUSHING;
     goto pause;
   }
 interrupt:
@@ -2017,18 +2005,16 @@ interrupt:
     /* we get here when the connection got interrupted */
     gst_rtsp_message_unset (&message);
     GST_DEBUG_OBJECT (src, "got interrupted");
-    ret = GST_FLOW_FLUSHING;
     goto pause;
   }
 connect_error:
   {
     gchar *str = gst_rtsp_strresult (res);
 
-    src->conninfo.connected = FALSE;
+    priv->conninfo.connected = FALSE;
     GST_ELEMENT_ERROR (src, RESOURCE, OPEN_READ_WRITE, (NULL),
         ("Could not connect to server. (%s)", str));
     g_free (str);
-    ret = GST_FLOW_ERROR;
 
     goto pause;
   }
@@ -2039,7 +2025,6 @@ receive_error:
     GST_ELEMENT_ERROR (src, RESOURCE, READ, (NULL),
         ("Could not receive message. (%s)", str));
     g_free (str);
-    ret = GST_FLOW_ERROR;
 
     goto pause;
   }
@@ -2048,14 +2033,11 @@ handle_request_failed:
     gchar *str = gst_rtsp_strresult (res);
 
     gst_rtsp_message_unset (&message);
-    if (res != GST_RTSP_EINTR) {
+    if (res != GST_RTSP_EINTR)
       GST_ELEMENT_ERROR (src, RESOURCE, WRITE, (NULL),
           ("Could not handle server message. (%s)", str));
-      g_free (str);
-      ret = GST_FLOW_ERROR;
-    } else {
-      ret = GST_FLOW_FLUSHING;
-    }
+    g_free (str);
+
     goto pause;
   }
 server_eof:
@@ -2063,53 +2045,65 @@ server_eof:
     GST_DEBUG_OBJECT (src, "we got an eof from the server");
     GST_ELEMENT_WARNING (src, RESOURCE, READ, (NULL),
         ("The server closed the connection."));
-    src->conninfo.connected = FALSE;
+    priv->conninfo.connected = FALSE;
     gst_rtsp_message_unset (&message);
-    ret = GST_FLOW_EOS;
 
     goto pause;
   }
 pause:
   {
-    const gchar *reason = gst_flow_get_name (ret);
+    gchar *str = gst_rtsp_strresult (res);
+    GstWFDBaseSrcClass *klass = GST_WFD_BASE_SRC_GET_CLASS (src);
 
-    GST_DEBUG_OBJECT (src, "pausing task, reason %s", reason);
-    if (ret == GST_FLOW_EOS) {
+    if (res == GST_RTSP_EEOF) {
       /* perform EOS logic */
-      gst_wfdrtspsrc_push_event (src, gst_event_new_eos ());
-    } else if (ret == GST_FLOW_NOT_LINKED || ret < GST_FLOW_EOS) {
+      if (klass->push_event)
+        klass->push_event(src, gst_event_new_eos ());
+    } else if (res == GST_RTSP_EINTR) {
+      GST_DEBUG_OBJECT (src, "interupted");
+    } else if (res < GST_RTSP_OK) {
       /* for fatal errors we post an error message, post the error before the
        * EOS so the app knows about the error first. */
       GST_ELEMENT_ERROR (src, STREAM, FAILED,
           ("Internal data flow error."),
-          ("streaming task paused, reason %s (%d)", reason, ret));
-      gst_wfdrtspsrc_push_event (src, gst_event_new_eos ());
+          ("streaming task paused, reason %s (%d)", str, res));
+      if (klass->push_event)
+        klass->push_event(src, gst_event_new_eos ());
     }
-    return FALSE;
+
+    if (res != GST_RTSP_EINTR) {
+      GST_DEBUG_OBJECT (src, "pausing task, reason %s", str);
+      gst_wfd_base_src_loop_send_cmd (src, WFD_CMD_WAIT, WFD_CMD_LOOP);
+    }
+
+    g_free (str);
+
+    return res;
   }
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_try_send (GstWFDRTSPSrc * src, GstRTSPMessage * request,
+gst_wfd_base_src_try_send (GstWFDBaseSrc * src, GstRTSPMessage * request,
     GstRTSPMessage * response, GstRTSPStatusCode * code)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
   GstRTSPResult res = GST_RTSP_OK;
   GstRTSPStatusCode thecode = GST_RTSP_STS_OK;
 
-  res = gst_wfdrtspsrc_connection_send (src, request, src->ptcp_timeout);
+  res = gst_wfd_base_src_connection_send (src, request, priv->ptcp_timeout);
   if (res < 0)
     goto send_error;
 
-  gst_rtsp_connection_reset_timeout (src->conninfo.connection);
+  gst_rtsp_connection_reset_timeout (priv->conninfo.connection);
 
 next:
-  res = gst_wfdrtspsrc_connection_receive (src, response, src->ptcp_timeout);
+  res = gst_wfd_base_src_connection_receive (src, response, priv->ptcp_timeout);
   if (res < 0)
     goto receive_error;
 
   switch (response->type) {
     case GST_RTSP_MESSAGE_REQUEST:
-      res = gst_wfdrtspsrc_handle_request(src, response);
+      res = gst_wfd_base_src_handle_request(src, response);
       if (res == GST_RTSP_EEOF)
         goto server_eof;
       else if (res < 0)
@@ -2176,7 +2170,7 @@ server_eof:
 }
 
 /**
- * gst_wfdrtspsrc_send:
+ * gst_wfd_base_src_send:
  * @src: the rtsp source
  * @conn: the connection to send on
  * @request: must point to a valid request
@@ -2196,7 +2190,7 @@ server_eof:
  */
 
 static GstRTSPResult
-gst_wfdrtspsrc_send (GstWFDRTSPSrc * src, GstRTSPMessage * request,
+gst_wfd_base_src_send (GstWFDBaseSrc * src, GstRTSPMessage * request,
     GstRTSPMessage * response, GstRTSPStatusCode * code)
 {
   GstRTSPStatusCode int_code = GST_RTSP_STS_OK;
@@ -2207,7 +2201,7 @@ gst_wfdrtspsrc_send (GstWFDRTSPSrc * src, GstRTSPMessage * request,
   method = request->type_data.request.method;
 
   if ((res =
-          gst_wfdrtspsrc_try_send (src, request, response, &int_code)) < 0)
+          gst_wfd_base_src_try_send (src, request, response, &int_code)) < 0)
     goto error;
 
   /* If the user requested the code, let them handle errors, otherwise
@@ -2239,7 +2233,7 @@ error_response:
       case GST_RTSP_STS_METHOD_NOT_ALLOWED:
         GST_ERROR_OBJECT (src, "got NOT IMPLEMENTED, disable method %s",
             gst_rtsp_method_as_text (method));
-        src->methods &= ~method;
+        src->priv->methods &= ~method;
         res = GST_RTSP_OK;
         break;
       default:
@@ -2262,8 +2256,9 @@ error_response:
  * server.
  */
 static gboolean
-gst_wfdrtspsrc_parse_methods (GstWFDRTSPSrc * src, GstRTSPMessage * response)
+gst_wfd_base_src_parse_methods (GstWFDBaseSrc * src, GstRTSPMessage * response)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
   GstRTSPHeaderField field;
   gchar *respoptions;
   gchar **options;
@@ -2271,7 +2266,7 @@ gst_wfdrtspsrc_parse_methods (GstWFDRTSPSrc * src, GstRTSPMessage * response)
   gint i;
 
   /* reset supported methods */
-  src->methods = 0;
+  priv->methods = 0;
 
   /* Try Allow Header first */
   field = GST_RTSP_HDR_ALLOW;
@@ -2302,25 +2297,25 @@ gst_wfdrtspsrc_parse_methods (GstWFDRTSPSrc * src, GstRTSPMessage * response)
 
       /* keep bitfield of supported methods */
       if (method != GST_RTSP_INVALID)
-        src->methods |= method;
+        priv->methods |= method;
     }
     g_strfreev (options);
 
     indx++;
   }
 
-  if (src->methods == 0) {
+  if (priv->methods == 0) {
     /* neither Allow nor Public are required, assume the server supports
      * at least DESCRIBE, SETUP, we always assume it supports PLAY as
      * well. */
     GST_DEBUG_OBJECT (src, "could not get OPTIONS");
-    src->methods = GST_RTSP_SETUP;
+    priv->methods = GST_RTSP_SETUP;
   }
   /* always assume PLAY, FIXME, extensions should be able to override
    * this */
-  src->methods |= GST_RTSP_PLAY;
+  priv->methods |= GST_RTSP_PLAY;
 
-  if (!(src->methods & GST_RTSP_SETUP))
+  if (!(priv->methods & GST_RTSP_SETUP))
     goto no_setup;
 
   return TRUE;
@@ -2334,7 +2329,7 @@ no_setup:
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_create_transports_string (GstWFDRTSPSrc * src, gchar ** transports)
+gst_wfd_base_src_create_transports_string (GstWFDBaseSrc * src, gchar ** transports)
 {
   GString *result;
 
@@ -2353,15 +2348,54 @@ gst_wfdrtspsrc_create_transports_string (GstWFDRTSPSrc * src, gchar ** transport
   g_string_append (result, "RTP/AVP");
   g_string_append (result, "/UDP");
   g_string_append (result, ";unicast;client_port=");
-  g_string_append_printf (result, "%d", src->primary_rtpport);
+  g_string_append_printf (result, "%d", src->priv->primary_rtpport);
   g_string_append (result, "-");
-  g_string_append_printf (result, "%d", src->primary_rtpport+1);
+  g_string_append_printf (result, "%d", src->priv->primary_rtpport+1);
 
   *transports = g_string_free (result, FALSE);
 
   GST_DEBUG_OBJECT (src, "prepared transports %s", GST_STR_NULL (*transports));
 
   return GST_RTSP_OK;
+}
+
+gboolean
+gst_wfd_base_src_activate (GstWFDBaseSrc *src)
+{
+  GST_DEBUG_OBJECT (src, "activating streams");
+
+  if (src->srcpad) {
+    GST_DEBUG_OBJECT (src, "setting caps");
+    gst_pad_set_caps (src->srcpad, src->caps);
+
+    GST_DEBUG_OBJECT (src, "activating srcpad");
+    gst_pad_set_active (src->srcpad, TRUE);
+  }
+
+  return TRUE;
+}
+
+void
+gst_wfd_base_src_get_transport_info (GstWFDBaseSrc *src,
+    GstRTSPTransport * transport, const gchar ** destination, gint * min, gint * max)
+{
+  g_return_if_fail (transport);
+  g_return_if_fail (transport->lower_transport == GST_RTSP_LOWER_TRANS_UDP);
+
+  if (destination) {
+    /* first take the source, then the endpoint to figure out where to send
+     * the RTCP. */
+    if (!(*destination = transport->source)) {
+      if (src->priv->conninfo.connection)
+        *destination =
+            gst_rtsp_connection_get_ip (src->priv->conninfo.connection);
+    }
+  }
+  if (min && max) {
+    /* for unicast we only expect the ports here */
+    *min = transport->server_port.min;
+    *max = transport->server_port.max;
+  }
 }
 
 /* Perform the SETUP request for all the streams.
@@ -2377,34 +2411,41 @@ gst_wfdrtspsrc_create_transports_string (GstWFDRTSPSrc * src, gchar ** transport
  * which basically means creating the pipeline.
  */
 static gboolean
-gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
+gst_wfd_base_src_setup (GstWFDBaseSrc * src)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
+  GstWFDBaseSrcClass * klass;
   GstRTSPResult res = GST_RTSP_OK;
   GstRTSPMessage request = { 0 };
   GstRTSPMessage response = { 0 };
-  WFDRTSPManager *manager = NULL;
   GstRTSPLowerTrans protocols = GST_RTSP_LOWER_TRANS_UNKNOWN;
   GstRTSPStatusCode code = GST_RTSP_STS_OK;
+  gchar *resptrans = NULL;
+  GstRTSPTransport transport = { 0 };
+  gchar *transports = NULL;
   GstRTSPUrl *url;
   gchar *hval;
-  gchar *transports = NULL;
 
-  if (!src->conninfo.connection || !src->conninfo.connected)
+  klass = GST_WFD_BASE_SRC_GET_CLASS (src);
+
+  if (G_UNLIKELY (!klass->prepare_transport))
+    goto no_function;
+  if (G_UNLIKELY (!klass->configure_transport))
+    goto no_function;
+
+  if (!priv->conninfo.connection || !priv->conninfo.connected)
     goto no_connection;
 
-  url = gst_rtsp_connection_get_url (src->conninfo.connection);
+  url = gst_rtsp_connection_get_url (priv->conninfo.connection);
   protocols = url->transports & GST_RTSP_LOWER_TRANS_UDP;
   if (protocols == 0)
     goto no_protocols;
 
-  GST_DEBUG_OBJECT (src, "doing setup of with %s", GST_STR_NULL(src->conninfo.location));
-
-  manager = src->manager;
-  manager->control_connection = src->conninfo.connection;
+  GST_DEBUG_OBJECT (src, "doing setup of with %s", GST_STR_NULL(priv->conninfo.location));
 
   GST_DEBUG_OBJECT (src, "protocols = 0x%x", protocols);
   /* create a string with first transport in line */
-  res = gst_wfdrtspsrc_create_transports_string (src, &transports);
+  res = gst_wfd_base_src_create_transports_string (src, &transports);
   if (res < 0 || transports == NULL)
     goto setup_transport_failed;
 
@@ -2414,34 +2455,32 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
     goto setup_transport_failed;
   }
 
-    /* now prepare the manager with the selected transport */
-    if (!wfd_rtsp_manager_prepare_transport (manager,
-		src->primary_rtpport, src->primary_rtpport+1)) {
-      GST_DEBUG_OBJECT (src, "could not prepare transport");
-      goto setup_failed;
-    }
+  /* now prepare with the selected transport */
+  res = klass->prepare_transport(src, priv->primary_rtpport, priv->primary_rtpport+1);
+  if (res < 0)
+    goto setup_failed;
 
   /* create SETUP request */
-  res = gst_rtsp_message_init_request (&request, GST_RTSP_SETUP, src->conninfo.location);
+  res =
+      gst_rtsp_message_init_request (&request, GST_RTSP_SETUP, priv->conninfo.location);
   if (res < 0) {
     g_free (transports);
     goto create_request_failed;
   }
 
-  gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar *)src->user_agent);
   gst_rtsp_message_add_header (&request, GST_RTSP_HDR_TRANSPORT, transports);
   g_free (transports);
 
   /* if the user wants a non default RTP packet size we add the blocksize
    * parameter */
-  if (src->rtp_blocksize > 0) {
-    hval = g_strdup_printf ("%d", src->rtp_blocksize);
+  if (priv->rtp_blocksize > 0) {
+    hval = g_strdup_printf ("%d", priv->rtp_blocksize);
     gst_rtsp_message_add_header (&request, GST_RTSP_HDR_BLOCKSIZE, hval);
     g_free (hval);
   }
 
   /* handle the code ourselves */
-  if ((res = gst_wfdrtspsrc_send (src, &request, &response, &code) < 0))
+  if ((res = gst_wfd_base_src_send (src, &request, &response, &code) < 0))
     goto send_error;
 
   switch (code) {
@@ -2457,56 +2496,41 @@ gst_wfdrtspsrc_setup (GstWFDRTSPSrc * src)
   }
 
   /* parse response transport */
-  {
-    gchar *resptrans = NULL;
-    GstRTSPTransport transport = { 0 };
+  gst_rtsp_message_get_header (&response, GST_RTSP_HDR_TRANSPORT,
+      &resptrans, 0);
+  if (!resptrans)
+    goto no_transport;
 
-    gst_rtsp_message_get_header (&response, GST_RTSP_HDR_TRANSPORT,
-        &resptrans, 0);
-    if (!resptrans)
-      goto no_transport;
-
-    /* parse transport, go to next manager on parse error */
-    if (gst_rtsp_transport_parse (resptrans, &transport) != GST_RTSP_OK) {
-      GST_ERROR_OBJECT (src, "failed to parse transport %s", resptrans);
-      goto setup_failed;
-    }
-
-    switch (transport.lower_transport) {
-      case GST_RTSP_LOWER_TRANS_UDP:
-        protocols = GST_RTSP_LOWER_TRANS_UDP;
-        break;
-      case GST_RTSP_LOWER_TRANS_TCP:
-      case GST_RTSP_LOWER_TRANS_UDP_MCAST:
-        GST_DEBUG_OBJECT (src, "transport %d is not supported",
-            transport.lower_transport);
-        goto setup_failed;
-	  break;
-      default:
-        GST_DEBUG_OBJECT (src, "manager %p unknown transport %d", manager,
-            transport.lower_transport);
-        goto setup_failed;
-        break;
-    }
-
-    /* now configure the manager with the selected transport */
-    if (!wfd_rtsp_manager_configure_transport (manager, &transport)) {
-      GST_DEBUG_OBJECT (src, "could not configure transport");
-      goto setup_failed;
-    }
-
-    /* clean up our transport struct */
-    gst_rtsp_transport_init (&transport);
-    /* clean up used RTSP messages */
-    gst_rtsp_message_unset (&request);
-    gst_rtsp_message_unset (&response);
+  /* parse transport, go to next manager on parse error */
+  if (gst_rtsp_transport_parse (resptrans, &transport) != GST_RTSP_OK) {
+    GST_ERROR_OBJECT (src, "failed to parse transport %s", resptrans);
+    goto setup_failed;
   }
 
-  src->state = GST_RTSP_STATE_READY;
+  /* now configure the manager with the selected transport */
+  res = klass->configure_transport(src, &transport);
+  if (res < 0)
+    goto setup_failed;
+
+  priv->protocol = transport.lower_transport;
+
+  /* clean up our transport struct */
+  gst_rtsp_transport_init (&transport);
+  /* clean up used RTSP messages */
+  gst_rtsp_message_unset (&request);
+  gst_rtsp_message_unset (&response);
+
+  priv->state = GST_RTSP_STATE_READY;
 
   return TRUE;
 
   /* ERRORS */
+no_function:
+  {
+    GST_ELEMENT_ERROR (src, LIBRARY, INIT, (NULL),
+        ("No prepare or configure function."));
+    return FALSE;
+  }
 no_connection:
   {
     GST_ELEMENT_ERROR (src, RESOURCE, READ, (NULL),
@@ -2576,8 +2600,9 @@ cleanup_error:
  *   WFD session capability negotiation
  */
 static GstRTSPResult
-gst_wfdrtspsrc_open (GstWFDRTSPSrc * src)
+gst_wfd_base_src_open (GstWFDBaseSrc * src)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
   GstRTSPResult res = GST_RTSP_OK;
   GstRTSPMessage request = { 0 };
   GstRTSPMessage response = { 0 };
@@ -2586,20 +2611,20 @@ gst_wfdrtspsrc_open (GstWFDRTSPSrc * src)
   gchar *str = NULL;
 
   /* can't continue without a valid url */
-  if (G_UNLIKELY (src->conninfo.url == NULL))
+  if (G_UNLIKELY (priv->conninfo.url == NULL))
     goto no_url;
 
-  if ((res = gst_wfdrtspsrc_conninfo_connect (src, &src->conninfo)) < 0)
+  if ((res = gst_wfd_base_src_conninfo_connect (src, &priv->conninfo)) < 0)
     goto connect_failed;
 
-  res = gst_wfdrtspsrc_connection_receive (src, &message, src->ptcp_timeout);
+  res = gst_wfd_base_src_connection_receive (src, &message, priv->ptcp_timeout);
   if(res != GST_RTSP_OK)
     goto connect_failed;
 
   if(message.type == GST_RTSP_MESSAGE_REQUEST) {
     method = message.type_data.request.method;
     if(method == GST_RTSP_OPTIONS) {
-      res = gst_wfdrtspsrc_handle_request(src, &message);
+      res = gst_wfd_base_src_handle_request(src, &message);
       if (res < GST_RTSP_OK)
         goto connect_failed;
     } else
@@ -2616,43 +2641,40 @@ gst_wfdrtspsrc_open (GstWFDRTSPSrc * src)
     goto create_request_failed;
 
   gst_rtsp_message_add_header (&request, GST_RTSP_HDR_REQUIRE, "org.wfa.wfd1.0");
-  gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
 
   /* send OPTIONS */
   GST_DEBUG_OBJECT (src, "send options...");
-  if ((res = gst_wfdrtspsrc_send (src, &request, &response,
+  if ((res = gst_wfd_base_src_send (src, &request, &response,
           NULL)) < 0)
     goto send_error;
 
   /* parse OPTIONS */
-  if (!gst_wfdrtspsrc_parse_methods (src, &response))
+  if (!gst_wfd_base_src_parse_methods (src, &response))
     goto methods_error;
 
  /* Receive request message from source */
 receive_request_message:
-  res = gst_wfdrtspsrc_connection_receive (src, &message,
-    src->ptcp_timeout);
+  res = gst_wfd_base_src_connection_receive (src, &message,
+    priv->ptcp_timeout);
   if(res != GST_RTSP_OK)
     goto connect_failed;
 
   if(message.type == GST_RTSP_MESSAGE_REQUEST) {
     method = message.type_data.request.method;
     if(method == GST_RTSP_GET_PARAMETER ||method == GST_RTSP_SET_PARAMETER) {
-      res = gst_wfdrtspsrc_handle_request(src, &message);
+      res = gst_wfd_base_src_handle_request(src, &message);
       if (res < GST_RTSP_OK)
-        goto handle_request_failed;	  
+        goto handle_request_failed;
     } else
       goto methods_error;
 
-    if (src->state != GST_RTSP_STATE_READY)
+    if (priv->state != GST_RTSP_STATE_READY)
       goto receive_request_message;
   }
 
   /* clean up any messages */
   gst_rtsp_message_unset (&request);
   gst_rtsp_message_unset (&response);
-
-  gst_wfdrtspsrc_loop_end_cmd (src, CMD_OPEN, res);
 
   return res;
 
@@ -2706,9 +2728,9 @@ cleanup_error:
   {
     GST_ERROR_OBJECT (src, "failed to open");
 
-    if (src->conninfo.connection) {
+    if (priv->conninfo.connection) {
       GST_ERROR_OBJECT (src, "free connection");
-      gst_wfdrtspsrc_conninfo_close (src, &src->conninfo, TRUE);
+      gst_wfd_base_src_conninfo_close (src, &priv->conninfo, TRUE);
     }
     gst_rtsp_message_unset (&request);
     gst_rtsp_message_unset (&response);
@@ -2717,29 +2739,31 @@ cleanup_error:
 }
 
 static void
-gst_wfdrtspsrc_send_close_cmd (GstWFDRTSPSrc * src)
+gst_wfd_base_src_send_close_cmd (GstWFDBaseSrc * src)
 {
-  gst_wfdrtspsrc_loop_send_cmd (src, CMD_CLOSE);
+  gst_wfd_base_src_loop_send_cmd (src, WFD_CMD_CLOSE, WFD_CMD_ALL);
 }
 
 /* Note : RTSP M8 :
  *   Send TEARDOWN request to WFD source.
  */
 static GstRTSPResult
-gst_wfdrtspsrc_close (GstWFDRTSPSrc * src, gboolean only_close)
+gst_wfd_base_src_close (GstWFDBaseSrc * src, gboolean only_close)
 {
-  WFDRTSPManager *manager = NULL;
+  GstWFDBaseSrcPrivate *priv = src->priv;
+  GstWFDBaseSrcClass *klass;
   GstRTSPMessage request = { 0 };
   GstRTSPMessage response = { 0 };
   GstRTSPResult res = GST_RTSP_OK;
 
   GST_DEBUG_OBJECT (src, "TEARDOWN...");
 
-  manager = src->manager;
+  klass = GST_WFD_BASE_SRC_GET_CLASS (src);
 
-  wfd_rtsp_manager_set_state (manager, GST_STATE_READY);
+  if (klass->set_state)
+    klass->set_state (src, GST_STATE_READY);
 
-  if (src->state < GST_RTSP_STATE_READY) {
+  if (priv->state < GST_RTSP_STATE_READY) {
     GST_DEBUG_OBJECT (src, "not ready, doing cleanup");
     goto close;
   }
@@ -2747,20 +2771,20 @@ gst_wfdrtspsrc_close (GstWFDRTSPSrc * src, gboolean only_close)
   if (only_close)
     goto close;
 
-  if (!src->conninfo.connection || !src->conninfo.connected)
+  if (!priv->conninfo.connection || !priv->conninfo.connected)
     goto close;
 
-  if (!(src->methods & (GST_RTSP_PLAY | GST_RTSP_TEARDOWN)))
+  if (!(priv->methods & (GST_RTSP_PLAY | GST_RTSP_TEARDOWN)))
     goto not_supported;
 
   /* do TEARDOWN */
   res =
-      gst_rtsp_message_init_request (&request, GST_RTSP_TEARDOWN, src->conninfo.url_str);
+      gst_rtsp_message_init_request (&request, GST_RTSP_TEARDOWN, priv->conninfo.url_str);
   if (res < 0)
     goto create_request_failed;
 
   if ((res =
-          gst_wfdrtspsrc_send (src, &request, &response,
+          gst_wfd_base_src_send (src, &request, &response,
               NULL)) < 0)
     goto send_error;
 
@@ -2771,18 +2795,9 @@ gst_wfdrtspsrc_close (GstWFDRTSPSrc * src, gboolean only_close)
 close:
   /* close connections */
   GST_DEBUG_OBJECT (src, "closing connection...");
-  gst_wfdrtspsrc_conninfo_close (src, &src->conninfo, TRUE);
-  if (manager) {
-    GST_DEBUG_OBJECT (src, "closing manager %p connection...", manager);
-    gst_wfdrtspsrc_conninfo_close (src, &manager->conninfo, TRUE);
-  }
+  gst_wfd_base_src_conninfo_close (src, &priv->conninfo, TRUE);
 
-  /* cleanup */
-  gst_wfdrtspsrc_cleanup (src);
-
-  src->state = GST_RTSP_STATE_INVALID;
-
-  gst_wfdrtspsrc_loop_end_cmd (src, CMD_CLOSE, res);
+  priv->state = GST_RTSP_STATE_INVALID;
 
   return res;
 
@@ -2828,7 +2843,7 @@ not_supported:
  * packets that are from before the seek.
  */
 static gboolean
-gst_wfdrtspsrc_parse_rtpinfo (GstWFDRTSPSrc * src, gchar * rtpinfo)
+gst_wfd_base_src_parse_rtpinfo (GstWFDBaseSrc * src, gchar * rtpinfo)
 {
   gchar **infos;
   gint i, j;
@@ -2838,7 +2853,6 @@ gst_wfdrtspsrc_parse_rtpinfo (GstWFDRTSPSrc * src, gchar * rtpinfo)
   infos = g_strsplit (rtpinfo, ",", 0);
   for (i = 0; infos[i]; i++) {
     gchar **fields;
-    WFDRTSPManager *manager;
     gint64 seqbase;
     gint64 timebase;
 
@@ -2846,7 +2860,6 @@ gst_wfdrtspsrc_parse_rtpinfo (GstWFDRTSPSrc * src, gchar * rtpinfo)
 
     /* init values, types of seqbase and timebase are bigger than needed so we
      * can store -1 as uninitialized values */
-    manager = NULL;
     seqbase = GST_CLOCK_TIME_NONE;
     timebase = GST_CLOCK_TIME_NONE;
 
@@ -2861,7 +2874,6 @@ gst_wfdrtspsrc_parse_rtpinfo (GstWFDRTSPSrc * src, gchar * rtpinfo)
       fields[j] = g_strchug (fields[j]);
       if (g_str_has_prefix (fields[j], "url=")) {
         /* get the url and the manager */
-        manager = src->manager;
       } else if (g_str_has_prefix (fields[j], "seq=")) {
         seqbase = atoi (fields[j] + 4);
       } else if (g_str_has_prefix (fields[j], "rtptime=")) {
@@ -2870,15 +2882,9 @@ gst_wfdrtspsrc_parse_rtpinfo (GstWFDRTSPSrc * src, gchar * rtpinfo)
     }
     g_strfreev (fields);
     /* now we need to store the values for the caps of the manager */
-    if (manager != NULL) {
-      GST_DEBUG_OBJECT (src,
-          "found manager %p, setting: seqbase %"G_GINT64_FORMAT", timebase %" G_GINT64_FORMAT,
-          manager, seqbase, timebase);
-
-      /* we have a manager, configure detected params */
-      manager->seqbase = seqbase;
-      manager->timebase = timebase;
-    }
+    GST_DEBUG_OBJECT (src,
+        "setting: seqbase %"G_GINT64_FORMAT", timebase %" G_GINT64_FORMAT,
+         seqbase, timebase);
   }
   g_strfreev (infos);
 
@@ -2886,17 +2892,19 @@ gst_wfdrtspsrc_parse_rtpinfo (GstWFDRTSPSrc * src, gchar * rtpinfo)
 }
 
 static void
-gst_wfdrtspsrc_send_play_cmd (GstWFDRTSPSrc * src)
+gst_wfd_base_src_send_play_cmd (GstWFDBaseSrc * src)
 {
-  gst_wfdrtspsrc_loop_send_cmd (src, CMD_PLAY);
+  gst_wfd_base_src_loop_send_cmd (src, WFD_CMD_PLAY, WFD_CMD_LOOP);
 }
 
 /* Note : RTSP M7 :
  *   Send PLAY request to WFD source. WFD source begins audio and/or video streaming.
  */
 static GstRTSPResult
-gst_wfdrtspsrc_play (GstWFDRTSPSrc * src)
+gst_wfd_base_src_play (GstWFDBaseSrc * src)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
+  GstWFDBaseSrcClass *klass;
   GstRTSPMessage request = { 0 };
   GstRTSPMessage response = { 0 };
   GstRTSPResult res = GST_RTSP_OK;
@@ -2905,23 +2913,23 @@ gst_wfdrtspsrc_play (GstWFDRTSPSrc * src)
 
   GST_DEBUG_OBJECT (src, "PLAY...");
 
-  if (!src->conninfo.connection || !src->conninfo.connected)
+  klass = GST_WFD_BASE_SRC_GET_CLASS (src);
+
+  if (!priv->conninfo.connection || !priv->conninfo.connected)
     goto done;
 
-  if (!(src->methods & GST_RTSP_PLAY))
+  if (!(priv->methods & GST_RTSP_PLAY))
     goto not_supported;
 
-  if (src->state == GST_RTSP_STATE_PLAYING)
+  if (priv->state == GST_RTSP_STATE_PLAYING)
     goto was_playing;
 
   /* do play */
-  res = gst_rtsp_message_init_request (&request, GST_RTSP_PLAY, src->conninfo.url_str);
+  res = gst_rtsp_message_init_request (&request, GST_RTSP_PLAY, priv->conninfo.url_str);
   if (res < 0)
     goto create_request_failed;
 
-  gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->user_agent);
-
-  if ((res = gst_wfdrtspsrc_send (src, &request, &response, NULL)) < 0)
+  if ((res = gst_wfd_base_src_send (src, &request, &response, NULL)) < 0)
     goto send_error;
 
   gst_rtsp_message_unset (&request);
@@ -2932,23 +2940,22 @@ gst_wfdrtspsrc_play (GstWFDRTSPSrc * src)
   hval_idx = 0;
   while (gst_rtsp_message_get_header (&response, GST_RTSP_HDR_RTP_INFO,
           &hval, hval_idx++) == GST_RTSP_OK)
-    gst_wfdrtspsrc_parse_rtpinfo (src, hval);
+    gst_wfd_base_src_parse_rtpinfo (src, hval);
 
   gst_rtsp_message_unset (&response);
 
   /* configure the caps of the streams after we parsed all headers. */
-  gst_wfdrtspsrc_configure_caps (src);
+  gst_wfd_base_src_configure_caps (src);
 
   /* set to PLAYING after we have configured the caps, otherwise we
    * might end up calling request_key (with SRTP) while caps are still
    * being configured. */
-  wfd_rtsp_manager_set_state (src->manager, GST_STATE_PLAYING);
+  if (klass->set_state)
+    klass->set_state (src, GST_STATE_PLAYING);
 
-  src->state = GST_RTSP_STATE_PLAYING;
+  priv->state = GST_RTSP_STATE_PLAYING;
 
 done:
-  gst_wfdrtspsrc_loop_end_cmd (src, CMD_PLAY, res);
-
   return res;
 
   /* ERRORS */
@@ -2978,51 +2985,52 @@ send_error:
 }
 
 static void
-gst_wfdrtspsrc_send_pause_cmd (GstWFDRTSPSrc * src)
+gst_wfd_base_src_send_pause_cmd (GstWFDBaseSrc * src)
 {
-  gst_wfdrtspsrc_loop_send_cmd (src, CMD_PAUSE);
+  gst_wfd_base_src_loop_send_cmd (src, WFD_CMD_PAUSE, WFD_CMD_LOOP);
 }
 
 /* Note : RTSP M9  :
  *   Send PAUSE request to WFD source. WFD source pauses the audio video stream(s).
  */
 static GstRTSPResult
-gst_wfdrtspsrc_pause (GstWFDRTSPSrc * src)
+gst_wfd_base_src_pause (GstWFDBaseSrc * src)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
   GstRTSPResult res = GST_RTSP_OK;
   GstRTSPMessage request = { 0 };
   GstRTSPMessage response = { 0 };
+  GstWFDBaseSrcClass * klass;
 
   GST_DEBUG_OBJECT (src, "PAUSE...");
 
-  if (!src->conninfo.connection || !src->conninfo.connected)
+  klass = GST_WFD_BASE_SRC_GET_CLASS (src);
+
+  if (!priv->conninfo.connection || !priv->conninfo.connected)
     goto no_connection;
 
-  if (!(src->methods & GST_RTSP_PAUSE))
+  if (!(priv->methods & GST_RTSP_PAUSE))
     goto not_supported;
 
-  if (src->state == GST_RTSP_STATE_READY)
+  if (priv->state == GST_RTSP_STATE_READY)
     goto was_paused;
 
-  if (gst_rtsp_message_init_request (&request, GST_RTSP_PAUSE, src->conninfo.url_str) < 0)
+  if (gst_rtsp_message_init_request (&request, GST_RTSP_PAUSE, priv->conninfo.url_str) < 0)
     goto create_request_failed;
 
-  gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar *)src->user_agent);
-
-  if ((res = gst_wfdrtspsrc_send (src, &request, &response, NULL)) < 0)
+  if ((res = gst_wfd_base_src_send (src, &request, &response, NULL)) < 0)
     goto send_error;
 
   gst_rtsp_message_unset (&request);
   gst_rtsp_message_unset (&response);
 
-  wfd_rtsp_manager_set_state (src->manager, GST_STATE_PAUSED);
+  if (klass->set_state)
+    klass->set_state (src, GST_STATE_PAUSED);
 
 no_connection:
-  src->state = GST_RTSP_STATE_READY;
+  priv->state = GST_RTSP_STATE_READY;
 
 done:
-  gst_wfdrtspsrc_loop_end_cmd (src, CMD_PAUSE, res);
-
   return res;
 
   /* ERRORS */
@@ -3052,11 +3060,9 @@ send_error:
 }
 
 static void
-gst_wfdrtspsrc_handle_message (GstBin * bin, GstMessage * message)
+gst_wfd_base_src_handle_message (GstBin * bin, GstMessage * message)
 {
-  GstWFDRTSPSrc *src;
-
-  src = GST_WFDRTSPSRC (bin);
+  GstWFDBaseSrc *src = GST_WFD_BASE_SRC (bin);
 
   GST_DEBUG_OBJECT (src, "got %s message from %s",
       GST_MESSAGE_TYPE_NAME (message), GST_MESSAGE_SRC_NAME (message));
@@ -3076,36 +3082,17 @@ gst_wfdrtspsrc_handle_message (GstBin * bin, GstMessage * message)
     }
     case GST_MESSAGE_ERROR:
     {
-      WFDRTSPManager *manager;
-      GstObject *message_src;
       gchar* debug = NULL;
       GError* error = NULL;
-
-      message_src = GST_MESSAGE_SRC (message);
 
       gst_message_parse_error (message, &error, &debug);
       GST_ERROR_OBJECT (src, "error : %s", error->message);
       GST_ERROR_OBJECT (src, "debug : %s", debug);
-
-      if (debug)
-        g_free (debug);
-      debug = NULL;
+      g_free (debug);
       g_error_free (error);
 
-      manager = src->manager;
-      if (!manager)
-        goto forward;
-
-      /* we ignore the RTCP udpsrc */
-      if (manager->udpsrc[1] == GST_ELEMENT_CAST (message_src))
-        goto done;
-
-    forward:
       /* fatal but not our message, forward */
       GST_BIN_CLASS (parent_class)->handle_message (bin, message);
-      break;
-    done:
-      gst_message_unref (message);
       break;
     }
     default:
@@ -3118,85 +3105,85 @@ gst_wfdrtspsrc_handle_message (GstBin * bin, GstMessage * message)
 
 /* the thread where everything happens */
 static void
-gst_wfdrtspsrc_thread (GstWFDRTSPSrc * src)
+gst_wfd_base_src_thread (GstWFDBaseSrc * src)
 {
-  GstRTSPResult ret = GST_RTSP_OK;
-  gboolean running = FALSE;
+  GstWFDBaseSrcPrivate *priv = src->priv;
+  GstRTSPResult res = GST_RTSP_OK;
   gint cmd;
 
   GST_OBJECT_LOCK (src);
-  cmd = src->loop_cmd;
-  src->loop_cmd = CMD_WAIT;
-  GST_DEBUG_OBJECT (src, "got command %d", cmd);
+  cmd = priv->pending_cmd;
+  if (cmd == WFD_CMD_PLAY || cmd == WFD_CMD_PAUSE || cmd == WFD_CMD_REQUEST
+      || cmd == WFD_CMD_LOOP || cmd == WFD_CMD_OPEN)
+    priv->pending_cmd = WFD_CMD_LOOP;
+  else
+    priv->pending_cmd = WFD_CMD_WAIT;
+
+  GST_DEBUG_OBJECT (src, "got command %s", _cmd_to_string (cmd));
 
   /* we got the message command, so ensure communication is possible again */
-  gst_wfdrtspsrc_connection_flush (src, FALSE);
+  gst_wfd_base_src_connection_flush (src, FALSE);
 
-  /* we allow these to be interrupted */
-  if (cmd == CMD_LOOP)
-    src->waiting = TRUE;
+  priv->busy_cmd = cmd;
   GST_OBJECT_UNLOCK (src);
 
   switch (cmd) {
-    case CMD_OPEN:
-      ret = gst_wfdrtspsrc_open (src);
+    case WFD_CMD_OPEN:
+      res = gst_wfd_base_src_open (src);
       break;
-    case CMD_PLAY:
-      ret = gst_wfdrtspsrc_play (src);
-      if (ret == GST_RTSP_OK)
-        running = TRUE;
+    case WFD_CMD_PLAY:
+      res = gst_wfd_base_src_play (src);
       break;
-    case CMD_PAUSE:
-      ret = gst_wfdrtspsrc_pause (src);
-      if (ret == GST_RTSP_OK)
-        running = TRUE;
+    case WFD_CMD_PAUSE:
+      res = gst_wfd_base_src_pause (src);
       break;
-    case CMD_CLOSE:
-      ret = gst_wfdrtspsrc_close (src, FALSE);
+    case WFD_CMD_CLOSE:
+      res = gst_wfd_base_src_close (src, FALSE);
       break;
-    case CMD_LOOP:
-      running = gst_wfdrtspsrc_loop (src);
+    case WFD_CMD_LOOP:
+      res = gst_wfd_base_src_loop (src);
       break;
-     case CMD_REQUEST:
-      ret = gst_wfdrtspsrc_send_request (src);
-      if (ret == GST_RTSP_OK)
-        running = TRUE;
+    case WFD_CMD_REQUEST:
+      res = gst_wfd_base_src_send_request (src);
       break;
-   default:
+    default:
       break;
   }
 
   GST_OBJECT_LOCK (src);
   /* and go back to sleep */
-  if (src->loop_cmd == CMD_WAIT) {
-    if (running)
-      src->loop_cmd = CMD_LOOP;
-    else if (src->task)
-      gst_task_pause (src->task);
+  if (priv->pending_cmd == WFD_CMD_WAIT) {
+    if (priv->task)
+      gst_task_pause (priv->task);
   }
-
   /* reset waiting */
-  src->waiting = FALSE;
+  priv->busy_cmd = WFD_CMD_WAIT;
   GST_OBJECT_UNLOCK (src);
+
+  if (cmd == WFD_CMD_PLAY || cmd == WFD_CMD_PAUSE
+      || cmd == WFD_CMD_CLOSE || cmd == WFD_CMD_OPEN)
+    gst_wfd_base_src_loop_end_cmd (src, cmd, res);
 }
 
 static gboolean
-gst_wfdrtspsrc_start (GstWFDRTSPSrc * src)
+gst_wfd_base_src_start (GstWFDBaseSrc * src)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
+
   GST_DEBUG_OBJECT (src, "starting");
 
   GST_OBJECT_LOCK (src);
 
-  src->state = GST_RTSP_STATE_INIT;
+  priv->state = GST_RTSP_STATE_INIT;
 
-  src->loop_cmd = CMD_WAIT;
+  priv->pending_cmd = WFD_CMD_WAIT;
 
-  if (src->task == NULL) {
-    src->task = gst_task_new ((GstTaskFunction) gst_wfdrtspsrc_thread, src, NULL);
-    if (src->task == NULL)
+  if (priv->task == NULL) {
+    priv->task = gst_task_new ((GstTaskFunction) gst_wfd_base_src_thread, src, NULL);
+    if (priv->task == NULL)
       goto task_error;
 
-    gst_task_set_lock (src->task, &(GST_WFD_RTSP_TASK_GET_LOCK (src)));
+    gst_task_set_lock (priv->task, &(GST_WFD_BASE_TASK_GET_LOCK (src)));
   }
   GST_OBJECT_UNLOCK (src);
 
@@ -3205,37 +3192,37 @@ gst_wfdrtspsrc_start (GstWFDRTSPSrc * src)
   /* ERRORS */
 task_error:
   {
+    GST_OBJECT_UNLOCK (src);
     GST_ERROR_OBJECT (src, "failed to create task");
     return FALSE;
   }
 }
 
 static gboolean
-gst_wfdrtspsrc_stop (GstWFDRTSPSrc * src)
+gst_wfd_base_src_stop (GstWFDBaseSrc * src)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
   GstTask *task;
 
   GST_DEBUG_OBJECT (src, "stopping");
 
   GST_OBJECT_LOCK (src);
-  GST_DEBUG_OBJECT (src, "interrupt all command");
-  src->waiting = TRUE;
-  src->do_stop = TRUE;
+  priv->do_stop = TRUE;
   GST_OBJECT_UNLOCK (src);
 
   /* also cancels pending task */
-  gst_wfdrtspsrc_loop_send_cmd (src, CMD_WAIT);
+  gst_wfd_base_src_loop_send_cmd (src, WFD_CMD_WAIT, WFD_CMD_ALL);
 
   GST_OBJECT_LOCK (src);
-  if ((task = src->task)) {
-    src->task = NULL;
+  if ((task = priv->task)) {
+    priv->task = NULL;
     GST_OBJECT_UNLOCK (src);
 
     gst_task_stop (task);
 
     /* make sure it is not running */
-    GST_WFD_RTSP_TASK_LOCK (src);
-    GST_WFD_RTSP_TASK_UNLOCK (src);
+    GST_WFD_BASE_TASK_LOCK (src);
+    GST_WFD_BASE_TASK_UNLOCK (src);
 
     /* now wait for the task to finish */
     gst_task_join (task);
@@ -3246,34 +3233,36 @@ gst_wfdrtspsrc_stop (GstWFDRTSPSrc * src)
   }
   GST_OBJECT_UNLOCK (src);
 
-  /* ensure synchronously all is closed and clean */
-  gst_wfdrtspsrc_close (src, TRUE);
+  /* ensure synchronously all is closed */
+  gst_wfd_base_src_close (src, TRUE);
+
+  /* cleanup */
+  gst_wfd_base_src_cleanup (src);
 
   return TRUE;
 }
 
 
 static GstStateChangeReturn
-gst_wfdrtspsrc_change_state (GstElement * element, GstStateChange transition)
+gst_wfd_base_src_change_state (GstElement * element, GstStateChange transition)
 {
-  GstWFDRTSPSrc *src;
+  GstWFDBaseSrc *src;
   GstStateChangeReturn ret;
 
-  src = GST_WFDRTSPSRC (element);
+  src = GST_WFD_BASE_SRC (element);
 
   switch (transition) {
     case GST_STATE_CHANGE_NULL_TO_READY:
       GST_DEBUG_OBJECT (src, "NULL->READY");
-      if (!gst_wfdrtspsrc_start (src))
+      if (!gst_wfd_base_src_start (src))
         goto start_failed;
       break;
     case GST_STATE_CHANGE_READY_TO_PAUSED:
       GST_DEBUG_OBJECT (src, "READY->PAUSED");
-      gst_wfdrtspsrc_loop_send_cmd (src, CMD_OPEN);
+      gst_wfd_base_src_loop_send_cmd (src, WFD_CMD_OPEN, 0);
       break;
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
       GST_DEBUG_OBJECT(src, "PAUSED->PLAYING");
-      gst_wfdrtspsrc_loop_send_cmd (src, CMD_WAIT);
       break;
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
       GST_DEBUG_OBJECT(src, "PLAYING->PAUSED");
@@ -3294,21 +3283,20 @@ gst_wfdrtspsrc_change_state (GstElement * element, GstStateChange transition)
 
   switch (transition) {
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
-      gst_wfdrtspsrc_loop_send_cmd (src, CMD_PLAY);
+      gst_wfd_base_src_loop_send_cmd (src, WFD_CMD_PLAY, WFD_CMD_LOOP);
       break;
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
     case GST_STATE_CHANGE_READY_TO_PAUSED:
       ret = GST_STATE_CHANGE_NO_PREROLL;
       break;
     case GST_STATE_CHANGE_READY_TO_NULL:
-      gst_wfdrtspsrc_stop (src);
+      gst_wfd_base_src_stop (src);
       break;
     default:
       break;
   }
 
 done:
-  GST_DEBUG_OBJECT (src, "state change is done");
   return ret;
 
 start_failed:
@@ -3319,15 +3307,18 @@ start_failed:
 }
 
 static gboolean
-gst_wfdrtspsrc_send_event (GstElement * element, GstEvent * event)
+gst_wfd_base_src_send_event (GstElement * element, GstEvent * event)
 {
-  gboolean res;
-  GstWFDRTSPSrc *src;
+  gboolean res = FALSE;
+  GstWFDBaseSrc *src;
+  GstWFDBaseSrcClass *klass;
 
-  src = GST_WFDRTSPSRC (element);
+  src = GST_WFD_BASE_SRC (element);
+  klass = GST_WFD_BASE_SRC_GET_CLASS (src);
 
   if (GST_EVENT_IS_DOWNSTREAM (event)) {
-    res = gst_wfdrtspsrc_push_event (src, event);
+    if (klass->push_event)
+      res = klass->push_event(src, event);
   } else {
     res = GST_ELEMENT_CLASS (parent_class)->send_event (element, event);
   }
@@ -3336,25 +3327,35 @@ gst_wfdrtspsrc_send_event (GstElement * element, GstEvent * event)
 }
 
 static void
-gst_wfdrtspsrc_set_standby (GstWFDRTSPSrc * src)
+gst_wfd_base_src_set_standby (GstWFDBaseSrc * src)
 {
   GST_OBJECT_LOCK(src);
   memset (&src->request_param, 0, sizeof(GstWFDRequestParam));
   src->request_param.type = WFD_STANDBY;
   GST_OBJECT_UNLOCK(src);
 
-  gst_wfdrtspsrc_loop_send_cmd(src, CMD_REQUEST);
+  gst_wfd_base_src_loop_send_cmd(src, WFD_CMD_REQUEST, WFD_CMD_LOOP);
+}
+
+gboolean
+gst_wfd_base_src_set_target (GstWFDBaseSrc * src, GstPad *target)
+{
+  gboolean ret;
+
+  ret = gst_ghost_pad_set_target (GST_GHOST_PAD (src->srcpad), target);
+
+  return ret;
 }
 
 /*** GSTURIHANDLER INTERFACE *************************************************/
 static GstURIType
-gst_wfdrtspsrc_uri_get_type (GType type)
+gst_wfd_base_src_uri_get_type (GType type)
 {
   return GST_URI_SRC;
 }
 
 static const gchar * const *
-gst_wfdrtspsrc_uri_get_protocols (GType type)
+gst_wfd_base_src_uri_get_protocols (GType type)
 {
   static const gchar *protocols[] =
       { "rtsp", NULL };
@@ -3363,25 +3364,25 @@ gst_wfdrtspsrc_uri_get_protocols (GType type)
 }
 
 static gchar *
-gst_wfdrtspsrc_uri_get_uri (GstURIHandler * handler)
+gst_wfd_base_src_uri_get_uri (GstURIHandler * handler)
 {
-  GstWFDRTSPSrc *src = GST_WFDRTSPSRC (handler);
+  GstWFDBaseSrc *src = GST_WFD_BASE_SRC (handler);
 
   /* should not dup */
-  return src->conninfo.location;
+  return src->priv->conninfo.location;
 }
 
 static gboolean
-gst_wfdrtspsrc_uri_set_uri (GstURIHandler * handler, const gchar * uri, GError **error)
+gst_wfd_base_src_uri_set_uri (GstURIHandler * handler, const gchar * uri, GError **error)
 {
-  GstWFDRTSPSrc *src;
+  GstWFDBaseSrc *src;
   GstRTSPResult res;
   GstRTSPUrl *newurl = NULL;
 
-  src = GST_WFDRTSPSRC (handler);
+  src = GST_WFD_BASE_SRC (handler);
 
   /* same URI, we're fine */
-  if (src->conninfo.location && uri && !strcmp (uri, src->conninfo.location))
+  if (src->priv->conninfo.location && uri && !strcmp (uri, src->priv->conninfo.location))
     goto was_ok;
 
     /* try to parse */
@@ -3393,19 +3394,19 @@ gst_wfdrtspsrc_uri_set_uri (GstURIHandler * handler, const gchar * uri, GError *
   /* if worked, free previous and store new url object along with the original
    * location. */
   GST_DEBUG_OBJECT (src, "configuring URI");
-  g_free (src->conninfo.location);
-  src->conninfo.location = g_strdup (uri);
-  gst_rtsp_url_free (src->conninfo.url);
-  src->conninfo.url = newurl;
-  g_free (src->conninfo.url_str);
+  g_free (src->priv->conninfo.location);
+  src->priv->conninfo.location = g_strdup (uri);
+  gst_rtsp_url_free (src->priv->conninfo.url);
+  src->priv->conninfo.url = newurl;
+  g_free (src->priv->conninfo.url_str);
   if (newurl)
-    src->conninfo.url_str = gst_rtsp_url_get_request_uri (src->conninfo.url);
+    src->priv->conninfo.url_str = gst_rtsp_url_get_request_uri (src->priv->conninfo.url);
   else
-    src->conninfo.url_str = NULL;
+    src->priv->conninfo.url_str = NULL;
 
   GST_DEBUG_OBJECT (src, "set uri: %s", GST_STR_NULL (uri));
   GST_DEBUG_OBJECT (src, "request uri is: %s",
-      GST_STR_NULL (src->conninfo.url_str));
+      GST_STR_NULL (src->priv->conninfo.url_str));
 
   return TRUE;
 
@@ -3424,107 +3425,109 @@ parse_error:
 }
 
 static void
-gst_wfdrtspsrc_uri_handler_init (gpointer g_iface, gpointer iface_data)
+gst_wfd_base_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
 {
   GstURIHandlerInterface *iface = (GstURIHandlerInterface *) g_iface;
 
-  iface->get_type = gst_wfdrtspsrc_uri_get_type;
-  iface->get_protocols = gst_wfdrtspsrc_uri_get_protocols;
-  iface->get_uri = gst_wfdrtspsrc_uri_get_uri;
-  iface->set_uri = gst_wfdrtspsrc_uri_set_uri;
+  iface->get_type = gst_wfd_base_src_uri_get_type;
+  iface->get_protocols = gst_wfd_base_src_uri_get_protocols;
+  iface->get_uri = gst_wfd_base_src_uri_get_uri;
+  iface->set_uri = gst_wfd_base_src_uri_set_uri;
 }
 
-static GstRTSPResult _get_cea_resolution_and_set_to_src(GstWFDRTSPSrc *src, WFDVideoCEAResolution Resolution)
+static GstRTSPResult _get_cea_resolution_and_set_to_src(GstWFDBaseSrc *src, WFDVideoCEAResolution Resolution)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
   WFDVideoCEAResolution CEARes = Resolution;
+
   switch(CEARes)
   {
     case WFD_CEA_UNKNOWN:
       break;
     case WFD_CEA_640x480P60:
-      src->video_width=640;
-      src->video_height=480;
-      src->video_framerate=60;
+      priv->video_width=640;
+      priv->video_height=480;
+      priv->video_framerate=60;
       break;
     case WFD_CEA_720x480P60:
-      src->video_width=720;
-      src->video_height=480;
-      src->video_framerate=60;
+      priv->video_width=720;
+      priv->video_height=480;
+      priv->video_framerate=60;
       break;
     case WFD_CEA_720x480I60:
-      src->video_width=720;
-      src->video_height=480;
-      src->video_framerate=60;
+      priv->video_width=720;
+      priv->video_height=480;
+      priv->video_framerate=60;
       break;
     case WFD_CEA_720x576P50:
-      src->video_width=720;
-      src->video_height=576;
-      src->video_framerate=50;
+      priv->video_width=720;
+      priv->video_height=576;
+      priv->video_framerate=50;
       break;
     case WFD_CEA_720x576I50:
-       src->video_width=720;
-      src->video_height=576;
-      src->video_framerate=50;
+       priv->video_width=720;
+      priv->video_height=576;
+      priv->video_framerate=50;
       break;
     case WFD_CEA_1280x720P30:
-      src->video_width=1280;
-      src->video_height=720;
-      src->video_framerate=30;
+      priv->video_width=1280;
+      priv->video_height=720;
+      priv->video_framerate=30;
       break;
     case WFD_CEA_1280x720P60:
-      src->video_width=1280;
-      src->video_height=720;
-      src->video_framerate=60;
+      priv->video_width=1280;
+      priv->video_height=720;
+      priv->video_framerate=60;
       break;
     case WFD_CEA_1920x1080P30:
-      src->video_width=1920;
-      src->video_height=1080;
-      src->video_framerate=30;
+      priv->video_width=1920;
+      priv->video_height=1080;
+      priv->video_framerate=30;
       break;
     case WFD_CEA_1920x1080P60:
-      src->video_width=1920;
-      src->video_height=1080;
-      src->video_framerate=60;
+      priv->video_width=1920;
+      priv->video_height=1080;
+      priv->video_framerate=60;
       break;
     case WFD_CEA_1920x1080I60:
-      src->video_width=1920;
-      src->video_height=1080;
-      src->video_framerate=60;
+      priv->video_width=1920;
+      priv->video_height=1080;
+      priv->video_framerate=60;
       break;
     case WFD_CEA_1280x720P25:
-      src->video_width=1280;
-      src->video_height=720;
-      src->video_framerate=25;
+      priv->video_width=1280;
+      priv->video_height=720;
+      priv->video_framerate=25;
       break;
     case WFD_CEA_1280x720P50:
-      src->video_width=1280;
-      src->video_height=720;
-      src->video_framerate=50;
+      priv->video_width=1280;
+      priv->video_height=720;
+      priv->video_framerate=50;
       break;
     case WFD_CEA_1920x1080P25:
-      src->video_width=1920;
-      src->video_height=1080;
-      src->video_framerate=25;
+      priv->video_width=1920;
+      priv->video_height=1080;
+      priv->video_framerate=25;
       break;
     case WFD_CEA_1920x1080P50:
-      src->video_width=1920;
-      src->video_height=1080;
-      src->video_framerate=50;
+      priv->video_width=1920;
+      priv->video_height=1080;
+      priv->video_framerate=50;
       break;
     case WFD_CEA_1920x1080I50:
-      src->video_width=1920;
-      src->video_height=1080;
-      src->video_framerate=50;
+      priv->video_width=1920;
+      priv->video_height=1080;
+      priv->video_framerate=50;
       break;
     case WFD_CEA_1280x720P24:
-      src->video_width=1280;
-      src->video_height=720;
-      src->video_framerate=24;
+      priv->video_width=1280;
+      priv->video_height=720;
+      priv->video_framerate=24;
       break;
     case WFD_CEA_1920x1080P24:
-      src->video_width=1920;
-      src->video_height=1080;
-      src->video_framerate=24;
+      priv->video_width=1920;
+      priv->video_height=1080;
+      priv->video_framerate=24;
       break;
     default:
       break;
@@ -3532,162 +3535,164 @@ static GstRTSPResult _get_cea_resolution_and_set_to_src(GstWFDRTSPSrc *src, WFDV
   return GST_RTSP_OK;
 }
 
-static GstRTSPResult _get_vesa_resolution_and_set_to_src(GstWFDRTSPSrc *src, WFDVideoVESAResolution Resolution)
+static GstRTSPResult _get_vesa_resolution_and_set_to_src(GstWFDBaseSrc *src, WFDVideoVESAResolution Resolution)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
   WFDVideoVESAResolution VESARes = Resolution;
+
   switch(VESARes)
   {
     case WFD_VESA_UNKNOWN:
       break;
     case WFD_VESA_800x600P30:
-      src->video_width=800;
-      src->video_height=600;
-      src->video_framerate=30;
+      priv->video_width=800;
+      priv->video_height=600;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_800x600P60:
-      src->video_width=800;
-      src->video_height=600;
-      src->video_framerate=60;
+      priv->video_width=800;
+      priv->video_height=600;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1024x768P30:
-      src->video_width=1024;
-      src->video_height=768;
-      src->video_framerate=30;
+      priv->video_width=1024;
+      priv->video_height=768;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1024x768P60:
-      src->video_width=1024;
-      src->video_height=768;
-      src->video_framerate=60;
+      priv->video_width=1024;
+      priv->video_height=768;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1152x864P30:
-      src->video_width=1152;
-      src->video_height=864;
-      src->video_framerate=30;
+      priv->video_width=1152;
+      priv->video_height=864;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1152x864P60:
-      src->video_width=1152;
-      src->video_height=864;
-      src->video_framerate=60;
+      priv->video_width=1152;
+      priv->video_height=864;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1280x768P30:
-      src->video_width=1280;
-      src->video_height=768;
-      src->video_framerate=30;
+      priv->video_width=1280;
+      priv->video_height=768;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1280x768P60:
-      src->video_width=1280;
-      src->video_height=768;
-      src->video_framerate=60;
+      priv->video_width=1280;
+      priv->video_height=768;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1280x800P30:
-      src->video_width=1280;
-      src->video_height=800;
-      src->video_framerate=30;
+      priv->video_width=1280;
+      priv->video_height=800;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1280x800P60:
-      src->video_width=1280;
-      src->video_height=800;
-      src->video_framerate=60;
+      priv->video_width=1280;
+      priv->video_height=800;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1360x768P30:
-      src->video_width=1360;
-      src->video_height=768;
-      src->video_framerate=30;
+      priv->video_width=1360;
+      priv->video_height=768;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1360x768P60:
-      src->video_width=1360;
-      src->video_height=768;
-      src->video_framerate=60;
+      priv->video_width=1360;
+      priv->video_height=768;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1366x768P30:
-      src->video_width=1366;
-      src->video_height=768;
-      src->video_framerate=30;
+      priv->video_width=1366;
+      priv->video_height=768;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1366x768P60:
-      src->video_width=1366;
-      src->video_height=768;
-      src->video_framerate=60;
+      priv->video_width=1366;
+      priv->video_height=768;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1280x1024P30:
-      src->video_width=1280;
-      src->video_height=1024;
-      src->video_framerate=30;
+      priv->video_width=1280;
+      priv->video_height=1024;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1280x1024P60:
-      src->video_width=1280;
-      src->video_height=1024;
-      src->video_framerate=60;
+      priv->video_width=1280;
+      priv->video_height=1024;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1400x1050P30:
-      src->video_width=1400;
-      src->video_height=1050;
-      src->video_framerate=30;
+      priv->video_width=1400;
+      priv->video_height=1050;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1400x1050P60:
-      src->video_width=1400;
-      src->video_height=1050;
-      src->video_framerate=60;
+      priv->video_width=1400;
+      priv->video_height=1050;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1440x900P30:
-      src->video_width=1440;
-      src->video_height=900;
-      src->video_framerate=30;
+      priv->video_width=1440;
+      priv->video_height=900;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1440x900P60:
-      src->video_width=1440;
-      src->video_height=900;
-      src->video_framerate=60;
+      priv->video_width=1440;
+      priv->video_height=900;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1600x900P30:
-      src->video_width=1600;
-      src->video_height=900;
-      src->video_framerate=30;
+      priv->video_width=1600;
+      priv->video_height=900;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1600x900P60:
-      src->video_width=1600;
-      src->video_height=900;
-      src->video_framerate=60;
+      priv->video_width=1600;
+      priv->video_height=900;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1600x1200P30:
-      src->video_width=1600;
-      src->video_height=1200;
-      src->video_framerate=30;
+      priv->video_width=1600;
+      priv->video_height=1200;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1600x1200P60:
-      src->video_width=1600;
-      src->video_height=1200;
-      src->video_framerate=60;
+      priv->video_width=1600;
+      priv->video_height=1200;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1680x1024P30:
-      src->video_width=1680;
-      src->video_height=1024;
-      src->video_framerate=30;
+      priv->video_width=1680;
+      priv->video_height=1024;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1680x1024P60:
-      src->video_width=1680;
-      src->video_height=1024;
-      src->video_framerate=60;
+      priv->video_width=1680;
+      priv->video_height=1024;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1680x1050P30:
-      src->video_width=1680;
-      src->video_height=1050;
-      src->video_framerate=30;
+      priv->video_width=1680;
+      priv->video_height=1050;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1680x1050P60:
-      src->video_width=1680;
-      src->video_height=1050;
-      src->video_framerate=60;
+      priv->video_width=1680;
+      priv->video_height=1050;
+      priv->video_framerate=60;
       break;
     case WFD_VESA_1920x1200P30:
-      src->video_width=1920;
-      src->video_height=1200;
-      src->video_framerate=30;
+      priv->video_width=1920;
+      priv->video_height=1200;
+      priv->video_framerate=30;
       break;
     case WFD_VESA_1920x1200P60:
-      src->video_width=1920;
-      src->video_height=1200;
-      src->video_framerate=60;
+      priv->video_width=1920;
+      priv->video_height=1200;
+      priv->video_framerate=60;
       break;
     default:
       break;
@@ -3695,72 +3700,74 @@ static GstRTSPResult _get_vesa_resolution_and_set_to_src(GstWFDRTSPSrc *src, WFD
   return GST_RTSP_OK;
 }
 
-static GstRTSPResult _get_hh_resolution_and_set_to_src(GstWFDRTSPSrc *src, WFDVideoHHResolution Resolution)
+static GstRTSPResult _get_hh_resolution_and_set_to_src(GstWFDBaseSrc *src, WFDVideoHHResolution Resolution)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
   WFDVideoHHResolution HHRes = Resolution;
+
   switch(HHRes)
   {
     case WFD_HH_UNKNOWN:
       break;
     case WFD_HH_800x480P30:
-      src->video_width=800;
-      src->video_height=480;
-      src->video_framerate=30;
+      priv->video_width=800;
+      priv->video_height=480;
+      priv->video_framerate=30;
       break;
     case WFD_HH_800x480P60:
-      src->video_width=800;
-      src->video_height=480;
-      src->video_framerate=60;
+      priv->video_width=800;
+      priv->video_height=480;
+      priv->video_framerate=60;
       break;
     case WFD_HH_854x480P30:
-      src->video_width=854;
-      src->video_height=480;
-      src->video_framerate=30;
+      priv->video_width=854;
+      priv->video_height=480;
+      priv->video_framerate=30;
       break;
     case WFD_HH_854x480P60:
-      src->video_width=854;
-      src->video_height=480;
-      src->video_framerate=60;
+      priv->video_width=854;
+      priv->video_height=480;
+      priv->video_framerate=60;
       break;
     case WFD_HH_864x480P30:
-      src->video_width=864;
-      src->video_height=480;
-      src->video_framerate=30;
+      priv->video_width=864;
+      priv->video_height=480;
+      priv->video_framerate=30;
       break;
     case WFD_HH_864x480P60:
-      src->video_width=864;
-      src->video_height=480;
-      src->video_framerate=60;
+      priv->video_width=864;
+      priv->video_height=480;
+      priv->video_framerate=60;
       break;
     case WFD_HH_640x360P30:
-      src->video_width=640;
-      src->video_height=360;
-      src->video_framerate=30;
+      priv->video_width=640;
+      priv->video_height=360;
+      priv->video_framerate=30;
       break;
     case WFD_HH_640x360P60:
-      src->video_width=640;
-      src->video_height=360;
-      src->video_framerate=60;
+      priv->video_width=640;
+      priv->video_height=360;
+      priv->video_framerate=60;
       break;
     case WFD_HH_960x540P30:
-      src->video_width=960;
-      src->video_height=540;
-      src->video_framerate=30;
+      priv->video_width=960;
+      priv->video_height=540;
+      priv->video_framerate=30;
       break;
     case WFD_HH_960x540P60:
-      src->video_width=960;
-      src->video_height=540;
-      src->video_framerate=60;
+      priv->video_width=960;
+      priv->video_height=540;
+      priv->video_framerate=60;
       break;
     case WFD_HH_848x480P30:
-      src->video_width=848;
-      src->video_height=480;
-      src->video_framerate=30;
+      priv->video_width=848;
+      priv->video_height=480;
+      priv->video_framerate=30;
       break;
     case WFD_HH_848x480P60:
-      src->video_width=848;
-      src->video_height=480;
-      src->video_framerate=60;
+      priv->video_width=848;
+      priv->video_height=480;
+      priv->video_framerate=60;
       break;
     default:
       break;
@@ -3769,8 +3776,9 @@ static GstRTSPResult _get_hh_resolution_and_set_to_src(GstWFDRTSPSrc *src, WFDVi
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_get_audio_parameter(GstWFDRTSPSrc * src, WFDMessage * msg)
+gst_wfd_base_src_get_audio_parameter(GstWFDBaseSrc * src, WFDMessage * msg)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
   WFDAudioFormats audio_format = WFD_AUDIO_UNKNOWN;
   WFDAudioChannels audio_channels = WFD_CHANNEL_UNKNOWN;
   WFDAudioFreq audio_frequency = WFD_FREQ_UNKNOWN;
@@ -3784,7 +3792,7 @@ gst_wfdrtspsrc_get_audio_parameter(GstWFDRTSPSrc * src, WFDMessage * msg)
     return GST_RTSP_ERROR;
   }
 
-  src->audio_format = g_strdup(msg->audio_codecs->list->audio_format);
+  priv->audio_format = g_strdup(msg->audio_codecs->list->audio_format);
   if(audio_frequency == WFD_FREQ_48000)
     audio_frequency = 48000;
   else if(audio_frequency == WFD_FREQ_44100)
@@ -3799,15 +3807,15 @@ gst_wfdrtspsrc_get_audio_parameter(GstWFDRTSPSrc * src, WFDMessage * msg)
   else if(audio_channels == WFD_CHANNEL_8)
     audio_channels = 8;
 
-  src->audio_channels = audio_channels;
-  src->audio_frequency = audio_frequency;
-  src->audio_bitwidth = audio_bitwidth;
+  priv->audio_channels = audio_channels;
+  priv->audio_frequency = audio_frequency;
+  priv->audio_bitwidth = audio_bitwidth;
 
   return GST_RTSP_OK;
 }
 
 static GstRTSPResult
-gst_wfdrtspsrc_get_video_parameter(GstWFDRTSPSrc * src, WFDMessage * msg)
+gst_wfd_base_src_get_video_parameter(GstWFDBaseSrc * src, WFDMessage * msg)
 {
   WFDVideoCodecs cvCodec = WFD_VIDEO_UNKNOWN;
   WFDVideoNativeResolution cNative = WFD_VIDEO_CEA_RESOLUTION;
@@ -3897,9 +3905,31 @@ _dump_key_value (gpointer data, gpointer user_data G_GNUC_UNUSED)
   GST_ERROR ("   key: '%s', value: '%s'", key_string, key_value->value);
 }
 
+static const char *
+_cmd_to_string (guint cmd)
+{
+  switch (cmd) {
+    case WFD_CMD_OPEN:
+      return "OPEN";
+    case WFD_CMD_PLAY:
+      return "PLAY";
+    case WFD_CMD_PAUSE:
+      return "PAUSE";
+    case WFD_CMD_CLOSE:
+      return "CLOSE";
+    case WFD_CMD_WAIT:
+      return "WAIT";
+    case WFD_CMD_LOOP:
+      return "LOOP";
+    case WFD_CMD_REQUEST:
+      return "REQUEST";
+  }
+
+  return "unknown";
+}
 
 static GstRTSPResult
-gst_wfdrtspsrc_message_dump (GstRTSPMessage * msg)
+_rtsp_message_dump (GstRTSPMessage * msg)
 {
   guint8 *data;
   guint size;
