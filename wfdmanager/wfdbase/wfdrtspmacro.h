@@ -30,8 +30,6 @@
 #define WFD_MESSAGE_SET_CONNECTOR_TYPE "wfdconfig_set_connector_type"
 #define WFD_MESSAGE_SET_STANDBY "wfdconfig_set_standby"
 #define WFD_MESSAGE_SET_IDR_REQUEST "wfdconfig_set_idr_request"
-#define WFD_MESSAGE_SET_UIBC_CAPABILITY "wfdconfig_set_uibc_capability"
-#define WFD_MESSAGE_SET_UIBC_STATUS "wfdconfig_set_uibc_status"
 #define WFD_MESSAGE_FREE "wfdconfig_message_free"
 #define WFD_MESSAGE_DUMP "wfdconfig_message_dump"
 #define WFD_MESSAGE_AS_TEXT "wfdconfig_message_as_text"
@@ -44,8 +42,6 @@
 #define WFD_MESSAGE_SET_COUPLED_SINK "wfdconfig_set_coupled_sink"
 #define WFD_MESSAGE_GET_PRESENTATION_URL "wfdconfig_get_presentation_url"
 #define WFD_MESSAGE_GET_STANDBY "wfdconfig_get_standby"
-#define WFD_MESSAGE_GET_UIBC_CAPABILITY "wfdconfig_get_uibc_capability"
-#define WFD_MESSAGE_GET_UIBC_STATUS "wfdconfig_get_uibc_status"
 #define WFD_MESSAGE_GET_PREFERED_AUDIO_FORMAT "wfdconfig_get_prefered_audio_format"
 #define WFD_MESSAGE_GET_PREFERED_VIDEO_FORMAT "wfdconfig_get_prefered_video_format"
 #define WFD_MESSAGE_GET_TRIGGER_TYPE "wfdconfig_get_trigger_type"
@@ -386,38 +382,6 @@ G_STMT_START { \
       goto label;\
     }\
     wfd_res = func(msg, standby_enable);\
-  } else {\
-    wfd_res = WFD_NOT_SUPPORTED;\
-  }\
-  if (G_UNLIKELY (wfd_res != WFD_OK))\
-    goto label;\
-} G_STMT_END
-
-#define WFDCONFIG_GET_UIBC_CAPABILITY(msg, input_category, inp_type, inp_pair, inp_type_path_count, tcp_port, label)\
-G_STMT_START { \
-  if (src->extended_wfd_message_support){\
-    WFDResult (*func)(WFDMessage *, guint32 *, guint32 *, WFDHIDCTypePathPair **,guint32 *, guint32 *) = __wfd_config_message_func(src, WFD_MESSAGE_GET_UIBC_CAPABILITY);\
-    if(func == NULL) {\
-      wfd_res = WFD_NOT_IMPLEMENTED;\
-      goto label;\
-    }\
-    wfd_res = func(msg, input_category, inp_type, inp_pair, inp_type_path_count, tcp_port);\
-  } else {\
-    wfd_res = WFD_NOT_SUPPORTED;\
-  }\
-  if (G_UNLIKELY (wfd_res != WFD_OK))\
-    goto label;\
-} G_STMT_END
-
-#define WFDCONFIG_GET_UIBC_STATUS(msg, uibc_enable, label)\
-G_STMT_START { \
-  if (src->extended_wfd_message_support){\
-    WFDResult (*func)(WFDMessage *, gboolean *) = __wfd_config_message_func(src, WFD_MESSAGE_GET_UIBC_STATUS);\
-    if(func == NULL) {\
-      wfd_res = WFD_NOT_IMPLEMENTED;\
-      goto label;\
-    }\
-    wfd_res = func(msg, uibc_enable);\
   } else {\
     wfd_res = WFD_NOT_SUPPORTED;\
   }\

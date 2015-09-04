@@ -1,0 +1,40 @@
+diff --git wfdmanager/wfdbase/gstwfdbasesrc.c wfdmanager/wfdbase/gstwfdbasesrc.c
+index f9a7ab2..511f505 100755
+--- wfdmanager/wfdbase/gstwfdbasesrc.c
++++ wfdmanager/wfdbase/gstwfdbasesrc.c
+@@ -1314,6 +1314,9 @@ gst_wfd_base_src_handle_request (GstWFDBaseSrc * src, GstRTSPMessage * request)
+       WFDCONFIG_MESSAGE_PARSE_BUFFER(data, size, wfd_msg, message_config_error);
+       WFDCONFIG_MESSAGE_DUMP(wfd_msg);
+ 
++      if (!wfd_msg)
++        goto message_config_error;
++
+       /* Note : RTSP M3 :
+        *   The WFD source shall send RTSP M3 request to the WFD sink to query the WFD sink's attributes and capabilities.
+        *   A WFD sink shall respond with an RTSP M3 response message which contains the values of the requested parameters.
+@@ -3307,9 +3310,9 @@ start_failed:
+ static gboolean
+ gst_wfd_base_src_send_event (GstElement * element, GstEvent * event)
+ {
+-  gboolean res;
+-  GstWFDBaseSrc *src;
+-  GstWFDBaseSrcClass *klass;
++  gboolean res = FALSE;
++  GstWFDBaseSrc *src = NULL;
++  GstWFDBaseSrcClass *klass = NULL;
+ 
+   src = GST_WFD_BASE_SRC (element);
+   klass = GST_WFD_BASE_SRC_GET_CLASS (src);
+diff --git wfdmanager/wfdsrc/gstwfdsrc.c wfdmanager/wfdsrc/gstwfdsrc.c
+index 650e631..86f63ec 100755
+--- wfdmanager/wfdsrc/gstwfdsrc.c
++++ wfdmanager/wfdsrc/gstwfdsrc.c
+@@ -297,7 +297,7 @@ gst_wfd_src_cleanup (GstWFDBaseSrc *bsrc)
+       gst_element_set_state (src->udpsink[i], GST_STATE_NULL);
+       gst_bin_remove (GST_BIN_CAST (src), src->udpsink[i]);
+       gst_object_unref (src->udpsink[i]);
+-      src->udpsrc[i] = NULL;
++      src->udpsink[i] = NULL;
+     }
+   }
+   if (src->session) {

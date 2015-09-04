@@ -38,14 +38,14 @@
 #include "config.h"
 #endif
 
-#include "gstwfdrtspsrc.h"
+#include "wfdsrc/gstwfdsrc.h"
 #include "wfdrtpbuffer/gstwfdrtpbuffer.h"
 
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
 
-  if (!gst_element_register (plugin, "wfdrtspsrc", GST_RANK_NONE, GST_TYPE_WFDRTSPSRC))
+  if (!gst_element_register (plugin, "wfdsrc", GST_RANK_NONE, GST_TYPE_WFD_SRC))
     return FALSE;
   if (!gst_element_register (plugin, "wfdrtpbuffer", GST_RANK_NONE, GST_TYPE_WFD_RTP_BUFFER))
     return FALSE;
