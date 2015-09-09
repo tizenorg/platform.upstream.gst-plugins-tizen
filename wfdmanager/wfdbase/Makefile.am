@@ -6,9 +6,10 @@ lib_LTLIBRARIES = libgstwfdbase.la
 #libgstwfdbase_include_HEADERS =	\
 #	gstwfdbasesrc.h
 
-noinst_HEADERS = gstwfdbasesrc.h wfdrtspconfigmessage.h wfdrtspmacro.h
+noinst_HEADERS = gstwfdbasesrc.h gstwfdsinkmessage.h
 
-libgstwfdbase_la_SOURCES = gstwfdbasesrc.c
+libgstwfdbase_la_SOURCES = gstwfdbasesrc.c \
+			gstwfdsinkmessage.c
 
 libgstwfdbase_la_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_CFLAGS)
 
