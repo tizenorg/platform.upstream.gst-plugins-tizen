@@ -51,6 +51,9 @@ GST_DEBUG_CATEGORY_STATIC (waylandsrc_debug);
 #define DEFAULT_WIDTH 640
 #define DEFAULT_HEIGHT 480
 
+//#define DUMP_BUFFER
+#define USE_MM_VIDEO_BUFFER
+
 #define C(b,m)              (char)(((b) >> (m)) & 0xFF)
 #define B(c,s)              ((((unsigned int)(c)) & 0xff) << (s))
 #define FOURCC(a,b,c,d)     (B(d,24) | B(c,16) | B(b,8) | B(a,0))
@@ -181,8 +184,6 @@ mirror_handle_dequeued (void *data,
   }
 
   wl_list_for_each (out_buffer, &src->buffer_list, link) {
-    GST_WARNING ("fetching start");
-
     if (out_buffer->wl_buffer != buffer)
       continue;
 
@@ -219,12 +220,12 @@ mirror_handle_dequeued (void *data,
 
     src->last_frame_no = next_frame_no;
 
-    GST_DEBUG ("Buffer [%d] dequeued",
+    GST_DEBUG_OBJECT (src, "Buffer [%d] dequeued",
         wl_proxy_get_id ((struct wl_proxy *) buffer));
-    out_buffer->gst_buffer = gst_buffer_new ();
 
     if (src->use_tbm) {
       if (src->format == TIZEN_BUFFER_POOL_FORMAT_ARGB8888) {
+        out_buffer->gst_buffer = gst_buffer_new ();
         gst_buffer_append_memory (out_buffer->gst_buffer,
             gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
                 tbm_bo_map(out_buffer->bo[0], TBM_DEVICE_CPU, TBM_OPTION_READ).ptr,
@@ -232,13 +233,14 @@ mirror_handle_dequeued (void *data,
                 gst_wayland_src_gst_buffer_unref));
       } else if (src->format == TIZEN_BUFFER_POOL_FORMAT_NV12) {
 #ifndef USE_MM_VIDEO_BUFFER
+        out_buffer->gst_buffer = gst_buffer_new ();
         gst_buffer_append_memory (out_buffer->gst_buffer,
-            gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
+            gst_memory_new_wrapped (GST_MEMORY_FLAG_READONLY,
                 tbm_bo_map(out_buffer->bo[0], TBM_DEVICE_CPU, TBM_OPTION_READ).ptr,
                 tbm_bo_size(out_buffer->bo[0]), 0, tbm_bo_size(out_buffer->bo[0]),
                 (gpointer) out_buffer, gst_wayland_src_gst_buffer_unref));
         gst_buffer_append_memory (out_buffer->gst_buffer,
-            gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
+            gst_memory_new_wrapped (GST_MEMORY_FLAG_READONLY,
                 tbm_bo_map(out_buffer->bo[1], TBM_DEVICE_CPU, TBM_OPTION_READ).ptr,
                 tbm_bo_size(out_buffer->bo[1]), 0, tbm_bo_size(out_buffer->bo[1]),
                 (gpointer) out_buffer, NULL));
@@ -257,24 +259,63 @@ mirror_handle_dequeued (void *data,
         mm_video_buf->handle.bo[1] = out_buffer->bo[1];
         GST_INFO_OBJECT (src, "BO : %p %p", mm_video_buf->handle.bo[0], mm_video_buf->handle.bo[1]);
 
+        mm_video_buf->size[0] = (src->width * src->height);
+        mm_video_buf->size[1] = (src->width * (src->height >> 1));
         mm_video_buf->width[0] = src->width;
         mm_video_buf->height[0] = src->height;
         mm_video_buf->format = MM_PIXEL_FORMAT_NV12;
         mm_video_buf->width[1] = src->width;
         mm_video_buf->height[1] = src->height >> 1;
+
         mm_video_buf->stride_width[0] = GST_ROUND_UP_16 (mm_video_buf->width[0]);
         mm_video_buf->stride_height[0] = GST_ROUND_UP_16 (mm_video_buf->height[0]);
         mm_video_buf->stride_width[1] = GST_ROUND_UP_16 (mm_video_buf->width[1]);
         mm_video_buf->stride_height[1] = GST_ROUND_UP_16 (mm_video_buf->height[1]);
         mm_video_buf->is_secured = 0;
 
+        out_buffer->gst_buffer = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
+            out_buffer, sizeof (out_buffer), 0, sizeof (out_buffer), (gpointer) out_buffer,
+            gst_wayland_src_gst_buffer_unref);
+
         gst_buffer_append_memory (out_buffer->gst_buffer,
-            gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
+            gst_memory_new_wrapped (GST_MEMORY_FLAG_READONLY,
                 mm_video_buf, sizeof (*mm_video_buf), 0, sizeof (*mm_video_buf),
-                (gpointer) out_buffer, gst_wayland_src_gst_buffer_unref));
+                mm_video_buf, g_free));
+
+#ifdef DUMP_BUFFER
+        static int dump_cnt = 0;
+        void *data, *data1;
+        FILE *fp;
+
+        data = tbm_bo_map (out_buffer->bo[0], TBM_DEVICE_CPU, TBM_OPTION_READ).ptr;
+        if (!data) {
+          GST_ERROR_OBJECT (src, "get tbm bo handle failed: %s", strerror (errno));
+          return;
+        }
+        data1 = tbm_bo_map (out_buffer->bo[1], TBM_DEVICE_CPU, TBM_OPTION_READ).ptr;
+        if (!data1) {
+          GST_ERROR_OBJECT (src, "get tbm bo handle failed: %s", strerror (errno));
+          return;
+        }
+
+        fp = fopen ("/root/raw.dump", "a");
+        if (fp == NULL)
+          return;
+
+        if (100 < dump_cnt  && dump_cnt < 150) {
+          fwrite ((char *) data, tbm_bo_size(out_buffer->bo[0]), 1, fp);
+          fwrite ((char *) data1, tbm_bo_size(out_buffer->bo[1]), 1, fp);
+          GST_ERROR_OBJECT (src, "Dump :%d\n", out_buffer->size);
+        }
+
+        dump_cnt++;
+        fclose (fp);
+#endif
+
 #endif
       }
     } else {
+      out_buffer->gst_buffer = gst_buffer_new ();
       gst_buffer_append_memory (out_buffer->gst_buffer,
           gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE, out_buffer->data,
               out_buffer->size, 0, out_buffer->size, (gpointer) out_buffer,
@@ -290,10 +331,12 @@ mirror_handle_dequeued (void *data,
     g_mutex_unlock (&src->queue_lock);
 
     /* Notify src_create to get new item */
-    GST_WARNING ("signal");
+    GST_DEBUG_OBJECT (src, "signal");
     g_cond_signal (&src->queue_cond);
     break;
   }
+
+  return;
 }
 
 static void
@@ -624,6 +667,8 @@ tbm_buffer_create (GstWaylandSrc * src)
           src->width, src->height, src->format,
           tbm_bo_export (out_buffer->bo[0]), 0, src->width,
           tbm_bo_export (out_buffer->bo[1]), 0, src->width, 0, 0, 0);
+
+      out_buffer->size = src->width * src->height * 1.5;
       break;
     default:
       GST_WARNING_OBJECT (src, "unknown format");
@@ -700,14 +745,12 @@ gst_wayland_src_capture_thread (GstWaylandSrc * src)
 
     wl_display_flush (src->display);
 
-    GST_WARNING ("Poll start");
-    if (poll (&pfd, 1, 100) < 0) {
+    if (poll (&pfd, 1, -1) < 0) {
       wl_display_cancel_read (src->display);
       break;
     } else {
       wl_display_read_events (src->display);
       wl_display_dispatch_queue_pending (src->display, src->queue);
-      GST_WARNING ("Poll end");
     }
   }
 
@@ -1025,6 +1068,8 @@ gst_wayland_src_set_caps (GstBaseSrc * psrc, GstCaps * caps)
             "waylandsrc format not specified in caps.. Using default ARGB");
       } else {
         src->format = FOURCC (sformat[0], sformat[1], sformat[2], sformat[3]);
+        if (src->format == FOURCC_SN12)
+          src->format = FOURCC_NV12;
       }
     } else {
       GST_ERROR_OBJECT (src, "type is not video/x-raw");
@@ -1103,7 +1148,6 @@ gst_wayland_src_create (GstPushSrc * psrc, GstBuffer ** ret_buf)
   GstWaylandSrc *src = GST_WAYLAND_SRC (psrc);
   struct output_buffer *out_buffer = NULL;
 
-  GST_WARNING ("Create START--");
   g_mutex_lock (&src->queue_lock);
 
   if (g_queue_is_empty (src->buf_queue)) {
@@ -1132,13 +1176,12 @@ gst_wayland_src_create (GstPushSrc * psrc, GstBuffer ** ret_buf)
   *ret_buf = out_buffer->gst_buffer;
 
   GST_INFO_OBJECT (src,
-      "Create gst buffer for wl_buffer[%d] (Size:%d (%" GST_TIME_FORMAT
-      " PTS: %" G_GINT64_FORMAT ")",
+      "Create gst buffer [%d] for wl_buffer[%d] (Size:%d (%" GST_TIME_FORMAT
+      " PTS: %" G_GINT64_FORMAT ")", gst_buffer_get_size (out_buffer->gst_buffer),
       wl_proxy_get_id ((struct wl_proxy *) out_buffer->wl_buffer),
       out_buffer->size, GST_TIME_ARGS (GST_BUFFER_PTS (*ret_buf)),
       GST_BUFFER_PTS (*ret_buf));
 
-  GST_WARNING ("Create END--");
   return GST_FLOW_OK;
 }
 
