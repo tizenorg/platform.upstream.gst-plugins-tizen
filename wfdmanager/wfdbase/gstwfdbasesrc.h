@@ -62,7 +62,7 @@ G_BEGIN_DECLS
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <netinet/in.h>
-#include "wfdrtspconfigmessage.h"
+#include "gstwfdsinkmessage.h"
 
 #define ENABLE_WFD_MESSAGE
 
@@ -97,10 +97,10 @@ typedef struct {
 
   union {
     struct {
-      WFDSinkType type;
+      GstWFDSinkType type;
     }route_setting;
     struct {
-      WFDConnector type;
+      GstWFDConnector type;
     }connector_setting;
   };
 }GstWFDRequestParam;
@@ -118,11 +118,6 @@ struct _GstWFDBaseSrc {
 
   /* mutex for protecting state changes */
   GRecMutex        state_rec_lock;
-
-#ifdef ENABLE_WFD_MESSAGE
-  void *message_handle;
-  gboolean extended_wfd_message_support;
-#endif
 
   GstWFDBaseSrcPrivate *priv;
 };
