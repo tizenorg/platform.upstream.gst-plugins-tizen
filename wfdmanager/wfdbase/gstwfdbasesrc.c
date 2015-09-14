@@ -503,6 +503,8 @@ gst_wfd_base_src_init (GstWFDBaseSrc * src, gpointer g_class)
 #endif
   src->priv = GST_WFD_BASE_SRC_GET_PRIVATE (src);
 
+  g_return_if_fail (src->priv != NULL);
+
   src->is_ipv6 = FALSE;
   src->srcpad = NULL;
 
