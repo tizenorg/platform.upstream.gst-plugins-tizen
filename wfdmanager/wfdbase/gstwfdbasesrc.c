@@ -381,17 +381,25 @@ gst_wfd_base_src_class_init (GstWFDBaseSrcClass * klass)
 
   g_object_class_install_property (gobject_class, PROP_AUDIO_PARAM,
       g_param_spec_boxed ("audio-param", "audio parameters",
-          "A GstStructure specifies the mapping for audio parameters",
+          "A GstStructure mapped for wfd audio parameters, "
+          "See all attributes in WFD specification(wfd-audio-codecs)."
+          "\n			audio_codec: LPCM:0x01, AAC:0x02, AC3:0x04"
+          "\n			audio_latency: an integer"
+          "\n			audio_channels: 2:0x01, 4:0x02, 6:0x04 8:0x08"
+          "\n			audio_sampling_frequency: 44.1khz:1, 48khz:2\n",
           GST_TYPE_STRUCTURE, G_PARAM_READWRITE));
 
   g_object_class_install_property (gobject_class, PROP_VIDEO_PARAM,
       g_param_spec_boxed ("video-param", "video parameters",
-          "A GstStructure specifies the mapping for video parameters",
+          "A GstStructure mapped for wfd video parameters, "
+          "See all attributes in WFD specification(wfd-video-formats).\n",
           GST_TYPE_STRUCTURE, G_PARAM_READWRITE));
 
   g_object_class_install_property (gobject_class, PROP_HDCP_PARAM,
       g_param_spec_boxed ("hdcp-param", "HDCP parameters",
-          "A GstStructure specifies the mapping for HDCP parameters",
+          "A GstStructure mapped for WFD HDCP parameters."
+          "\n			hdcp_version: none:0, 2.0:1, 2.1:2"
+          "\n			hdcp_port_no: an integer\n",
           GST_TYPE_STRUCTURE, G_PARAM_READWRITE));
 
   g_object_class_install_property (gobject_class, PROP_ENABLE_PAD_PROBE,
