@@ -213,7 +213,11 @@ struct _GstWFDBaseSrcPrivate
   gint primary_rtpport;
 
   GstWFDConnInfo  conninfo;
-  GstRTSPLowerTrans protocol;
+  GstRTSPTransport transport;
+
+  /* RTP Info */
+  guint32       seqbase;
+  guint64       timebase;
 
   /* stream info */
   guint video_height;
@@ -518,7 +522,6 @@ gst_wfd_base_src_init (GstWFDBaseSrc * src, gpointer g_class)
 
   src->priv->conninfo.location = g_strdup (DEFAULT_LOCATION);
   src->priv->conninfo.url_str = NULL;
-  src->priv->protocol = GST_RTSP_LOWER_TRANS_UNKNOWN;
   src->priv->debug = DEFAULT_DEBUG;
   src->priv->retry = DEFAULT_RETRY;
   gst_wfd_base_src_set_tcp_timeout (src, DEFAULT_TCP_TIMEOUT);
@@ -527,6 +530,9 @@ gst_wfd_base_src_init (GstWFDBaseSrc * src, gpointer g_class)
   src->priv->hdcp_param = NULL;
   src->priv->audio_param = gst_wfd_rtsp_set_default_audio_param ();
   src->priv->video_param = gst_wfd_rtsp_set_default_video_param ();
+  src->priv->timebase = -1;
+  src->priv->seqbase = -1;
+  gst_rtsp_transport_init(&src->priv->transport);
 
   src->enable_pad_probe = FALSE;
   src->request_param.type = WFD_PARAM_NONE;
@@ -1048,6 +1054,12 @@ gst_wfd_base_src_configure_caps (GstWFDBaseSrc * src)
     caps = gst_caps_make_writable (caps);
     structure = gst_caps_get_structure (caps, 0);
     /* update caps */
+    if (priv->timebase != -1)
+      gst_caps_set_simple (caps, "clock-base", G_TYPE_UINT,
+          (guint) priv->timebase, NULL);
+    if (priv->seqbase != -1)
+      gst_caps_set_simple (caps, "seqnum-base", G_TYPE_UINT,
+          (guint) priv->seqbase, NULL);
     gst_structure_set (structure, "height", G_TYPE_INT, priv->video_height, NULL);
     gst_structure_set (structure, "width", G_TYPE_INT, priv->video_width, NULL);
     gst_structure_set (structure, "video-framerate", G_TYPE_INT, priv->video_framerate, NULL);
@@ -1292,7 +1304,6 @@ gst_wfd_base_src_handle_request (GstWFDBaseSrc * src, GstRTSPMessage * request)
         GST_ERROR ("gst_wfd_message_new is failed");
         goto message_config_error;
       }
-
       wfd_res = gst_wfd_message_init (wfd_msg);
       if (wfd_res != GST_WFD_OK) {
         GST_ERROR ("gst_wfd_message_init is failed");
@@ -1694,6 +1705,11 @@ gst_wfd_base_src_handle_request (GstWFDBaseSrc * src, GstRTSPMessage * request)
         if(wfd_res != GST_WFD_OK) {
           goto message_config_error;
         }
+        priv->transport.trans = trans;
+        priv->transport.profile = profile;
+        priv->transport.lower_transport = lowertrans;
+        priv->transport.client_port.min = rtp_port0;
+        priv->transport.client_port.max = rtp_port0+1;
       }
 
       /* Note : wfd-preferred-display-mode :
@@ -2362,29 +2378,51 @@ no_setup:
 }
 
 static GstRTSPResult
-gst_wfd_base_src_create_transports_string (GstWFDBaseSrc * src, gchar ** transports)
+gst_wfd_base_src_create_transports_string (GstWFDBaseSrc * src,
+    gchar ** transports)
 {
+  GstWFDBaseSrcPrivate *priv = src->priv;
   GString *result;
+  GstRTSPProfile profile = priv->transport.profile;
+  GstRTSPLowerTrans protocols = priv->transport.lower_transport;
 
   *transports = NULL;
 
-  GST_DEBUG_OBJECT (src, "got transports %s", GST_STR_NULL (*transports));
-
-  /* extension listed transports, use those */
-  if (*transports != NULL)
-    return GST_RTSP_OK;
 
   /* the default RTSP transports */
-  result = g_string_new ("");
-  GST_DEBUG_OBJECT (src, "adding UDP unicast");
+  result = g_string_new ("RTP");
 
-  g_string_append (result, "RTP/AVP");
-  g_string_append (result, "/UDP");
-  g_string_append (result, ";unicast;client_port=");
-  g_string_append_printf (result, "%d", src->priv->primary_rtpport);
-  g_string_append (result, "-");
-  g_string_append_printf (result, "%d", src->priv->primary_rtpport+1);
+  switch (profile) {
+    case GST_RTSP_PROFILE_AVP:
+      g_string_append (result, "/AVP");
+      break;
+    case GST_RTSP_PROFILE_SAVP:
+      g_string_append (result, "/SAVP");
+      break;
+    case GST_RTSP_PROFILE_AVPF:
+      g_string_append (result, "/AVPF");
+      break;
+    case GST_RTSP_PROFILE_SAVPF:
+      g_string_append (result, "/SAVPF");
+      break;
+    default:
+      break;
+  }
 
+  if (protocols & GST_RTSP_LOWER_TRANS_UDP) {
+    GST_DEBUG_OBJECT (src, "adding UDP unicast");
+    g_string_append (result, "/UDP");
+    g_string_append (result, ";unicast;client_port=");
+    g_string_append_printf (result, "%d", priv->transport.client_port.min);
+    g_string_append (result, "-");
+    g_string_append_printf (result, "%d", priv->transport.client_port.max);
+  } else if (protocols & GST_RTSP_LOWER_TRANS_TCP) {
+    GST_DEBUG_OBJECT (src, "adding TCP");
+    g_string_append (result, "/TCP;unicast;client_port=");
+    g_string_append_printf (result, "%d", priv->transport.client_port.min);
+    g_string_append (result, "-");
+    g_string_append_printf (result, "%d", priv->transport.client_port.max);
+  }
   *transports = g_string_free (result, FALSE);
 
   GST_DEBUG_OBJECT (src, "prepared transports %s", GST_STR_NULL (*transports));
@@ -2470,7 +2508,7 @@ gst_wfd_base_src_setup (GstWFDBaseSrc * src)
     goto no_connection;
 
   url = gst_rtsp_connection_get_url (priv->conninfo.connection);
-  protocols = url->transports & GST_RTSP_LOWER_TRANS_UDP;
+  protocols = url->transports;
   if (protocols == 0)
     goto no_protocols;
 
@@ -2489,7 +2527,7 @@ gst_wfd_base_src_setup (GstWFDBaseSrc * src)
   }
 
   /* now prepare with the selected transport */
-  res = klass->prepare_transport(src, priv->primary_rtpport, priv->primary_rtpport+1);
+  res = klass->prepare_transport(src, priv->transport.client_port.min, priv->transport.client_port.max);
   if (res < 0)
     goto setup_failed;
 
@@ -2544,8 +2582,6 @@ gst_wfd_base_src_setup (GstWFDBaseSrc * src)
   res = klass->configure_transport(src, &transport);
   if (res < 0)
     goto setup_failed;
-
-  priv->protocol = transport.lower_transport;
 
   /* clean up our transport struct */
   gst_rtsp_transport_init (&transport);
@@ -2674,6 +2710,7 @@ gst_wfd_base_src_open (GstWFDBaseSrc * src)
     goto create_request_failed;
 
   gst_rtsp_message_add_header (&request, GST_RTSP_HDR_REQUIRE, "org.wfa.wfd1.0");
+  gst_rtsp_message_add_header (&request, GST_RTSP_HDR_USER_AGENT, (const gchar*)src->priv->user_agent);
 
   /* send OPTIONS */
   GST_DEBUG_OBJECT (src, "send options...");
@@ -2886,15 +2923,15 @@ gst_wfd_base_src_parse_rtpinfo (GstWFDBaseSrc * src, gchar * rtpinfo)
   infos = g_strsplit (rtpinfo, ",", 0);
   for (i = 0; infos[i]; i++) {
     gchar **fields;
-    gint64 seqbase;
+    gint32 seqbase;
     gint64 timebase;
 
     GST_DEBUG_OBJECT (src, "parsing info %s", infos[i]);
 
     /* init values, types of seqbase and timebase are bigger than needed so we
      * can store -1 as uninitialized values */
-    seqbase = GST_CLOCK_TIME_NONE;
-    timebase = GST_CLOCK_TIME_NONE;
+    seqbase = -1;
+    timebase = -1;
 
     /* parse url, find manager for url.
      * parse seq and rtptime. The seq number should be configured in the rtp
@@ -2914,10 +2951,14 @@ gst_wfd_base_src_parse_rtpinfo (GstWFDBaseSrc * src, gchar * rtpinfo)
       }
     }
     g_strfreev (fields);
-    /* now we need to store the values for the caps of the manager */
+    /* now we need to store the values for the caps */
     GST_DEBUG_OBJECT (src,
-        "setting: seqbase %"G_GINT64_FORMAT", timebase %" G_GINT64_FORMAT,
-         seqbase, timebase);
+        "setting: seqbase %d, timebase %" G_GINT64_FORMAT,
+        seqbase, timebase);
+
+    /* we have a stream, configure detected params */
+    src->priv->seqbase = seqbase;
+    src->priv->timebase = timebase;
   }
   g_strfreev (infos);
 
@@ -3379,6 +3420,18 @@ gst_wfd_base_src_set_target (GstWFDBaseSrc * src, GstPad *target)
 
   return ret;
 }
+
+GstRTSPTransport gst_wfd_base_src_get_transport (GstWFDBaseSrc *src)
+{
+  GstRTSPTransport transport;
+
+  GST_OBJECT_LOCK(src);
+  transport = src->priv->transport;
+  GST_OBJECT_UNLOCK(src);
+
+  return transport;
+}
+
 
 /*** GSTURIHANDLER INTERFACE *************************************************/
 static GstURIType
