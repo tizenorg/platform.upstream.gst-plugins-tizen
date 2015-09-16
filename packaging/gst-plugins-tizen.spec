@@ -29,6 +29,7 @@ BuildRequires:	pkgconfig(xfixes)
 BuildRequires:	pkgconfig(dri2proto)
 %else
 BuildRequires:	pkgconfig(wayland-client)
+BuildRequires:	pkgconfig(wayland-tbm-client)
 BuildRequires:	pkgconfig(tizen-extension-client)
 %endif
 BuildRequires:	pkgconfig(libdrm)

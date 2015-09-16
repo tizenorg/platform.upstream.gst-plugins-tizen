@@ -42,6 +42,8 @@
 #include <xf86drm.h>
 #include <mm_types.h>
 #include <tizen-extension-client-protocol.h>
+#include <wayland-tbm-client.h>
+#include <tbm_surface_internal.h>
 #include "gstwaylandsrc.h"
 
 GST_DEBUG_CATEGORY_STATIC (waylandsrc_debug);
@@ -224,14 +226,14 @@ mirror_handle_dequeued (void *data,
         wl_proxy_get_id ((struct wl_proxy *) buffer));
 
     if (src->use_tbm) {
-      if (src->format == TIZEN_BUFFER_POOL_FORMAT_ARGB8888) {
+      if (src->format == TBM_FORMAT_ARGB8888) {
         out_buffer->gst_buffer = gst_buffer_new ();
         gst_buffer_append_memory (out_buffer->gst_buffer,
             gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
                 tbm_bo_map(out_buffer->bo[0], TBM_DEVICE_CPU, TBM_OPTION_READ).ptr,
                 out_buffer->size, 0, out_buffer->size, (gpointer) out_buffer,
                 gst_wayland_src_gst_buffer_unref));
-      } else if (src->format == TIZEN_BUFFER_POOL_FORMAT_NV12) {
+      } else if (src->format == TBM_FORMAT_NV12) {
 #ifndef USE_MM_VIDEO_BUFFER
         out_buffer->gst_buffer = gst_buffer_new ();
         gst_buffer_append_memory (out_buffer->gst_buffer,
@@ -431,21 +433,40 @@ shm_buffer_create (struct wl_shm *shm, gsize width, gsize height)
 static gboolean
 check_format (GstWaylandSrc * src)
 {
-  struct tbm_buffer_pool_data *pdata = NULL;
   struct tbm_buffer_format *fmt;
 
-  pdata = tizen_buffer_pool_get_user_data (src->tbm_buffer_pool);
-  if (pdata == NULL) {
-    GST_ERROR_OBJECT (src, "TBM buffer pool DATA is NULL");
-    return FALSE;
-  }
-
-  wl_list_for_each (fmt, &pdata->support_format_list, link)
+  wl_list_for_each (fmt, &src->support_format_list, link)
       if (fmt->format == src->format)
     return TRUE;
 
   return FALSE;
 }
+
+static void
+shoooter_handle_format(void *data,
+                       struct tizen_screenshooter *shooter,
+                       uint32_t format)
+{
+  GstWaylandSrc *src = (GstWaylandSrc *) data;
+  struct tbm_buffer_format *fmt;
+
+  if (src == NULL)
+    return;
+
+  fmt = g_malloc0 (sizeof (struct tbm_buffer_format));
+  if (fmt == NULL)
+    return;
+
+  fmt->format = format;
+  wl_list_insert (&src->support_format_list, &fmt->link);
+
+  GST_INFO ("Format : %c%c%c%c", FOURCC_STR (format));
+}
+
+static const struct tizen_screenshooter_listener shooter_listener =
+{
+    shoooter_handle_format
+};
 
 static void
 destroy_buffer (struct output_buffer *obuffer)
@@ -455,6 +476,8 @@ destroy_buffer (struct output_buffer *obuffer)
 
   if (obuffer->wl_buffer)
     wl_buffer_destroy (obuffer->wl_buffer);
+  if (obuffer->surface)
+    tbm_surface_destroy (obuffer->surface);
   if (obuffer->bo[0])
     tbm_bo_unref (obuffer->bo[0]);
   if (obuffer->bo[1])
@@ -466,149 +489,15 @@ destroy_buffer (struct output_buffer *obuffer)
   free (obuffer);
 }
 
-static void
-destroy_mirror_buffer_pool (struct tizen_buffer_pool *pool)
-{
-  struct tbm_buffer_pool_data *pdata = tizen_buffer_pool_get_user_data (pool);
-
-  if (pdata) {
-    struct tbm_buffer_format *fmt, *ff;
-
-    wl_list_for_each_safe (fmt, ff, &pdata->support_format_list, link) {
-      wl_list_remove (&fmt->link);
-      free (fmt);
-    }
-    if (pdata->bufmgr)
-      tbm_bufmgr_deinit (pdata->bufmgr);
-    if (pdata->drm_fd >= 0)
-      close (pdata->drm_fd);
-    if (pdata->device_name)
-      free (pdata->device_name);
-    free (pdata);
-  }
-
-  tizen_buffer_pool_destroy (pool);
-}
-
-static void
-buffer_pool_handle_device (void *data,
-    struct tizen_buffer_pool *tizen_buffer_pool, const char *device_name)
-{
-  struct tbm_buffer_pool_data *pdata = (struct tbm_buffer_pool_data *) data;
-
-  if (pdata == NULL) {
-    GST_INFO ("Name");
-    return;
-  }
-  if (device_name == NULL) {
-    GST_INFO ("Name");
-    return;
-  }
-
-  pdata->device_name = strdup (device_name);
-  GST_INFO ("Name : %d, device name : %s", pdata->name, pdata->device_name);
-}
-
-static void
-buffer_pool_handle_authenticated (void *data,
-    struct tizen_buffer_pool *tizen_buffer_pool)
-{
-  struct tbm_buffer_pool_data *pdata = (struct tbm_buffer_pool_data *) data;
-
-  GST_INFO ("Name");
-  if (pdata == NULL)
-    return;
-
-  /* authenticated */
-  pdata->authenticated = 1;
-  GST_INFO ("Name : %d", pdata->name);
-}
-
-static void
-buffer_pool_handle_capabilities (void *data,
-    struct tizen_buffer_pool *tizen_buffer_pool, uint32_t value)
-{
-  struct tbm_buffer_pool_data *pdata = (struct tbm_buffer_pool_data *) data;
-  drm_magic_t magic;
-  GstWaylandSrc *src = pdata->src;
-
-  if (pdata == NULL)
-    return;
-
-  GST_INFO ("Name : %d Value : %x", pdata->name, value);
-
-  /* check if buffer_pool has screenmirror capability */
-  if (!(value & TIZEN_BUFFER_POOL_CAPABILITY_SCREENMIRROR))
-    return;
-
-  pdata->has_capability = 1;
-
-  /* do authenticate only if a pool has the video capability */
-#ifdef O_CLOEXEC
-  pdata->drm_fd = open (pdata->device_name, O_RDWR | O_CLOEXEC);
-  if (pdata->drm_fd == -1 && errno == EINVAL)
-#endif
-  {
-    pdata->drm_fd = open (pdata->device_name, O_RDWR);
-    if (pdata->drm_fd != -1)
-      fcntl (pdata->drm_fd, F_SETFD, fcntl (pdata->drm_fd,
-              F_GETFD) | FD_CLOEXEC);
-  }
-
-  if (pdata->drm_fd < 0)
-    return;
-
-  if (drmGetMagic (pdata->drm_fd, &magic) != 0) {
-    close (pdata->drm_fd);
-    pdata->drm_fd = -1;
-    return;
-  }
-
-  tizen_buffer_pool_authenticate (tizen_buffer_pool, magic);
-
-  if (src)
-    wl_display_roundtrip (src->display);
-}
-
-static void
-buffer_pool_handle_format (void *data,
-    struct tizen_buffer_pool *tizen_buffer_pool, uint32_t format)
-{
-  struct tbm_buffer_pool_data *pdata = (struct tbm_buffer_pool_data *) data;
-  struct tbm_buffer_format *fmt;
-
-  if (pdata == NULL)
-    return;
-
-  if (!pdata->has_capability)
-    return;
-
-  fmt = g_malloc0 (sizeof (struct tbm_buffer_format));
-  if (fmt == NULL)
-    return;
-
-  fmt->format = format;
-  wl_list_insert (&pdata->support_format_list, &fmt->link);
-
-  GST_INFO ("Format : %c%c%c%c", FOURCC_STR (format));
-}
-
-static const struct tizen_buffer_pool_listener buffer_pool_listener = {
-  buffer_pool_handle_device,
-  buffer_pool_handle_authenticated,
-  buffer_pool_handle_capabilities,
-  buffer_pool_handle_format
-};
-
 static struct output_buffer *
 tbm_buffer_create (GstWaylandSrc * src)
 {
   struct output_buffer *out_buffer = NULL;
-  struct tbm_buffer_pool_data *pdata = NULL;
-  gsize block_size = 0, stride = 0;
+  tbm_bufmgr bufmgr;
+  tbm_surface_info_s info;
 
-  if (src->tbm_buffer_pool == NULL) {
-    GST_ERROR_OBJECT (src, "TBM buffer pool is NULL");
+  if (src->tbm_client == NULL) {
+    GST_ERROR_OBJECT (src, "wayland tbm client is NULL");
     return FALSE;
   }
 
@@ -618,57 +507,86 @@ tbm_buffer_create (GstWaylandSrc * src)
     return NULL;
   }
 
-  pdata = tizen_buffer_pool_get_user_data (src->tbm_buffer_pool);
-  if (pdata == NULL || pdata->bufmgr == NULL) {
-    GST_ERROR_OBJECT (src, "TBM buffer pool DATA is NULL");
+  bufmgr = wayland_tbm_client_get_bufmgr(src->tbm_client);
+  if (bufmgr == NULL) {
+    GST_ERROR_OBJECT (src, "tbm bufmgr is NULL");
     return FALSE;
   }
-
 
   out_buffer = g_malloc0 (sizeof *out_buffer);
   if (!out_buffer)
     return NULL;
 
   switch (src->format) {
-    case TIZEN_BUFFER_POOL_FORMAT_ARGB8888:
-    case TIZEN_BUFFER_POOL_FORMAT_XRGB8888:
-      stride = src->width * 4;
-      block_size = stride * src->height;
+    case TBM_FORMAT_ARGB8888:
+    case TBM_FORMAT_XRGB8888:
+      info.width = src->width;
+      info.height = src->height;
+      info.format = src->format;
+      info.bpp = tbm_surface_internal_get_bpp(info.format);
+      info.num_planes = 1;
+      info.planes[0].stride = info.width * (info.bpp >> 3);
+      info.planes[0].size = info.planes[0].stride * info.height;
+      info.planes[0].offset = 0;
+      info.size = info.planes[0].size;
 
-      out_buffer->bo[0] =
-          tbm_bo_alloc (pdata->bufmgr, block_size, TBM_BO_DEFAULT);
+      out_buffer->bo[0] = tbm_bo_alloc (bufmgr, info.size, TBM_BO_DEFAULT);
       if (out_buffer->bo[0] == NULL)
         goto failed;
 
-      out_buffer->wl_buffer =
-          tizen_buffer_pool_create_buffer (src->tbm_buffer_pool,
-          tbm_bo_export (out_buffer->bo[0]),
-          src->width, src->height, stride, src->format);
+      out_buffer->surface =
+          tbm_surface_internal_create_with_bos(&info, out_buffer->bo, 1);
+      if (out_buffer->surface == NULL)
+        goto failed;
 
-      out_buffer->size = block_size;
-      out_buffer->stride = stride;
+      out_buffer->wl_buffer =
+          wayland_tbm_client_create_buffer(src->tbm_client, out_buffer->surface);
+      if (out_buffer->wl_buffer == NULL)
+        goto failed;
+
+      wl_proxy_set_queue ((struct wl_proxy *)out_buffer->wl_buffer, src->queue);
+
+      out_buffer->size = info.size;
+      out_buffer->stride = info.planes[0].stride;
       break;
-    case TIZEN_BUFFER_POOL_FORMAT_NV12:
-    case TIZEN_BUFFER_POOL_FORMAT_NV21:
+    case TBM_FORMAT_NV12:
+    case TBM_FORMAT_NV21:
+      info.width = src->width;
+      info.height = src->height;
+      info.format = src->format;
+      info.bpp = tbm_surface_internal_get_bpp(info.format);
+      info.num_planes = 2;
+      info.planes[0].stride = info.width;
+      info.planes[0].size = info.planes[0].stride * info.height;
+      info.planes[0].offset = 0;
+      info.planes[1].stride = info.width;
+      info.planes[1].size = info.planes[1].stride * (info.height >> 1);
+      info.planes[1].offset = 0;
+      info.size = info.planes[0].size + info.planes[1].size;
+
       out_buffer->bo[0] =
-          tbm_bo_alloc (pdata->bufmgr, src->width * src->height,
-          TBM_BO_DEFAULT);
+          tbm_bo_alloc (bufmgr, info.planes[0].size, TBM_BO_DEFAULT);
       if (out_buffer->bo[0] == NULL)
         goto failed;
 
       out_buffer->bo[1] =
-          tbm_bo_alloc (pdata->bufmgr, src->width * src->height * 0.5,
-          TBM_BO_DEFAULT);
+          tbm_bo_alloc (bufmgr, info.planes[1].size, TBM_BO_DEFAULT);
       if (out_buffer->bo[1] == NULL)
         goto failed;
 
-      out_buffer->wl_buffer =
-          tizen_buffer_pool_create_planar_buffer (src->tbm_buffer_pool,
-          src->width, src->height, src->format,
-          tbm_bo_export (out_buffer->bo[0]), 0, src->width,
-          tbm_bo_export (out_buffer->bo[1]), 0, src->width, 0, 0, 0);
+      out_buffer->surface =
+          tbm_surface_internal_create_with_bos(&info, out_buffer->bo, 2);
+      if (out_buffer->surface == NULL)
+        goto failed;
 
-      out_buffer->size = src->width * src->height * 1.5;
+      out_buffer->wl_buffer =
+          wayland_tbm_client_create_buffer(src->tbm_client, out_buffer->surface);
+      if (out_buffer->wl_buffer == NULL)
+        goto failed;
+
+      wl_proxy_set_queue ((struct wl_proxy *)out_buffer->wl_buffer, src->queue);
+
+      out_buffer->size = info.size;
       break;
     default:
       GST_WARNING_OBJECT (src, "unknown format");
@@ -813,6 +731,7 @@ gst_wayland_src_init (GstWaylandSrc * src)
   src->buffer_copy_done = 0;
   wl_list_init (&src->output_list);
   wl_list_init (&src->buffer_list);
+  wl_list_init(&src->support_format_list);
 
   src->buf_queue = g_queue_new ();
 
@@ -820,7 +739,7 @@ gst_wayland_src_init (GstWaylandSrc * src)
   g_mutex_init (&src->cond_lock);
   g_cond_init (&src->queue_cond);
 
-  src->tbm_buffer_pool = NULL;
+  src->tbm_client = NULL;
   src->format = FOURCC_ARGB;
   src->width = DEFAULT_WIDTH;
   src->height = DEFAULT_HEIGHT;
@@ -836,6 +755,7 @@ gst_wayland_src_finalize (GObject * object)
   struct output *output_tmp = NULL;
   struct output_buffer *out_buffer = NULL;
   struct output_buffer *out_buffer_tmp = NULL;
+  struct tbm_buffer_format *fmt, *ff;
 
   g_mutex_clear (&src->queue_lock);
   g_mutex_clear (&src->cond_lock);
@@ -868,8 +788,12 @@ gst_wayland_src_finalize (GObject * object)
     tizen_screenmirror_destroy (src->screenmirror);
   if (src->screenshooter)
     tizen_screenshooter_destroy (src->screenshooter);
-  if (src->tbm_buffer_pool)
-    tizen_buffer_pool_destroy (src->tbm_buffer_pool);
+  if (src->tbm_client)
+    wayland_tbm_client_deinit (src->tbm_client);
+  wl_list_for_each_safe(fmt, ff, &src->support_format_list, link) {
+    wl_list_remove (&fmt->link);
+    free(fmt);
+  }
 
   if (src->queue)
     wl_event_queue_destroy (src->queue);
@@ -927,6 +851,12 @@ gst_wayland_src_connect (GstWaylandSrc * src)
   tizen_screenmirror_add_listener (src->screenmirror, &mirror_listener, src);
   tizen_screenmirror_set_stretch (src->screenmirror,
       TIZEN_SCREENMIRROR_STRETCH_KEEP_RATIO);
+
+  src->tbm_client = wayland_tbm_client_init (src->display);
+  if (src->tbm_client == NULL) {
+    GST_ERROR_OBJECT (src, "wayland tbm client is NULL");
+    return FALSE;
+  }
 
   GST_INFO_OBJECT (src, "gst_wayland_src_connect success");
   return TRUE;
@@ -1089,7 +1019,7 @@ gst_wayland_src_set_caps (GstBaseSrc * psrc, GstCaps * caps)
   }
 
   if (src->use_tbm && src->format == FOURCC_ARGB)
-    src->format = TIZEN_BUFFER_POOL_FORMAT_ARGB8888;
+    src->format = TBM_FORMAT_ARGB8888;
 
   GST_INFO_OBJECT (src, "format:%c%c%c%c, width: %d, height: %d",
       FOURCC_STR (src->format), src->width, src->height);
@@ -1231,46 +1161,6 @@ handle_global (void *data, struct wl_registry *registry,
     }
 
     GST_INFO ("shm is binded");
-  } else if (strcmp (interface, "tizen_buffer_pool") == 0) {
-    struct tizen_buffer_pool *pool;
-    struct tbm_buffer_pool_data *pdata;
-
-    pool = wl_registry_bind (registry, name, &tizen_buffer_pool_interface, 1);
-    if (pool == NULL) {
-      GST_ERROR_OBJECT (src, "wl_registry_bind failed");
-      return;
-    }
-
-    pdata = calloc (1, sizeof (struct tbm_buffer_pool_data));
-    if (!pdata) {
-      tizen_buffer_pool_destroy (pool);
-      GST_ERROR_OBJECT (src, "Allcation buffer pool failed");
-      return;
-    }
-
-    /* initial value */
-    pdata->name = name;
-    pdata->drm_fd = -1;
-    pdata->src = src;
-    wl_list_init (&pdata->support_format_list);
-
-    tizen_buffer_pool_add_listener (pool, &buffer_pool_listener, pdata);
-
-    /* make sure all tizen_buffer_pool's events are handled */
-    wl_display_roundtrip_queue (src->display, src->queue);
-
-    if (!pdata->has_capability || !pdata->authenticated)
-      destroy_mirror_buffer_pool (pool);
-    else {
-      pdata->bufmgr = tbm_bufmgr_init (pdata->drm_fd);
-      if (!pdata->bufmgr) {
-        destroy_mirror_buffer_pool (pool);
-        return;
-      }
-
-      src->tbm_buffer_pool = pool;
-      GST_INFO ("tizen_buffer_pool is binded");
-    }
   } else if (strcmp (interface, "tizen_screenshooter") == 0) {
     src->screenshooter =
         wl_registry_bind (registry, name, &tizen_screenshooter_interface, 1);
@@ -1278,6 +1168,9 @@ handle_global (void *data, struct wl_registry *registry,
       GST_ERROR_OBJECT (src, "tizen screenshooter is NULL");
       return;
     }
+
+    tizen_screenshooter_add_listener(src->screenshooter, &shooter_listener, src);
+
     GST_INFO ("Tizen screenshooter is created");
   }
 }

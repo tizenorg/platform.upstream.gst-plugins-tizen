@@ -63,6 +63,7 @@ struct output_buffer
 
   /* for tbm buffer */
   tbm_bo bo[2];
+  tbm_surface_h surface;
 
   struct wl_buffer *wl_buffer;
   GstBuffer *gst_buffer;
@@ -74,23 +75,6 @@ struct tbm_buffer_format
 {
   guint32 format;
   struct wl_list link;
-};
-
-struct tbm_buffer_pool_data
-{
-  guint32 name;
-  GstWaylandSrc *src;
-
-  gint has_capability;
-  struct wl_list support_format_list;
-
-  /* drm */
-  gchar *device_name;
-  gint drm_fd;
-  gint authenticated;
-
-  /* tbm */
-  tbm_bufmgr bufmgr;
 };
 
 /*
@@ -122,6 +106,7 @@ struct _GstWaylandSrc
   int buffer_copy_done;
   struct wl_list output_list;
   struct wl_list buffer_list;
+  struct wl_list support_format_list;
 
   GQueue *buf_queue;
   GMutex queue_lock;
@@ -133,7 +118,7 @@ struct _GstWaylandSrc
   guint width;
   guint height;
   guint32 format;
-  struct tizen_buffer_pool *tbm_buffer_pool;
+  struct wayland_tbm_client *tbm_client;
 };
 
 struct _GstWaylandSrcClass
