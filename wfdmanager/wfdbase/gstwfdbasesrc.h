@@ -53,15 +53,13 @@
 
 G_BEGIN_DECLS
 
-#include <gst/rtsp/gstrtspconnection.h>
-#include <gst/rtsp/gstrtspmessage.h>
-#include <gst/rtsp/gstrtspurl.h>
-#include <gst/rtsp/gstrtsprange.h>
+#include <gst/rtsp/rtsp.h>
 #include <sys/ioctl.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+
 #include "gstwfdsinkmessage.h"
 
 #define ENABLE_WFD_MESSAGE
@@ -152,6 +150,7 @@ gboolean gst_wfd_base_src_set_target (GstWFDBaseSrc * src, GstPad *target);
 gboolean gst_wfd_base_src_activate (GstWFDBaseSrc *src);
 void gst_wfd_base_src_get_transport_info (GstWFDBaseSrc *src,
     GstRTSPTransport * transport, const gchar ** destination, gint * min, gint * max);
+GstRTSPTransport gst_wfd_base_src_get_transport (GstWFDBaseSrc *src);
 
 G_END_DECLS
 

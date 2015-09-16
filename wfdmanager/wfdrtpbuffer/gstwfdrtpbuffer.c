@@ -1428,6 +1428,45 @@ gst_wfd_rtp_buffer_sink_event (GstPad * pad, GstObject * parent,
   GST_DEBUG_OBJECT (jitterbuffer, "received %s", GST_EVENT_TYPE_NAME (event));
 
   switch (GST_EVENT_TYPE (event)) {
+    case GST_EVENT_CUSTOM_DOWNSTREAM:{
+      const GstStructure *structure;
+
+      structure = gst_event_get_structure (event);
+      if (gst_structure_has_name (structure, "GstWFDEvent")) {
+        gboolean reset = FALSE;
+        gst_structure_get_boolean (structure, "reset", &reset);
+        if (reset) {
+          JBUF_LOCK (priv);
+          GST_DEBUG_OBJECT (jitterbuffer, "flush and reset jitterbuffer");
+          gst_segment_init (&priv->segment, GST_FORMAT_TIME);
+          priv->last_popped_seqnum = -1;
+          priv->last_out_time = -1;
+          priv->next_seqnum = -1;
+          priv->ips_rtptime = -1;
+          priv->ips_dts = GST_CLOCK_TIME_NONE;
+          priv->packet_spacing = 0;
+          priv->next_in_seqnum = -1;
+          priv->clock_rate = -1;
+          priv->last_pt = -1;
+          priv->eos = FALSE;
+          priv->estimated_eos = -1;
+          priv->last_elapsed = 0;
+          priv->ext_timestamp = -1;
+          priv->avg_jitter = 0;
+          priv->last_dts = -1;
+          priv->last_rtptime = -1;
+          GST_DEBUG_OBJECT (jitterbuffer, "flush and reset jitterbuffer");
+          wfd_rtp_buffer_flush (priv->jbuf, (GFunc) free_item, NULL);
+          wfd_rtp_buffer_disable_buffering (priv->jbuf, FALSE);
+          wfd_rtp_buffer_reset_skew (priv->jbuf);
+          remove_all_timers (jitterbuffer);
+          JBUF_SIGNAL_EVENT (priv);
+          JBUF_UNLOCK (priv);
+        }
+      }
+      ret = gst_pad_event_default (pad, parent, event);
+      break;
+    }
     case GST_EVENT_FLUSH_START:
       ret = gst_pad_push_event (priv->srcpad, event);
       gst_wfd_rtp_buffer_flush_start (jitterbuffer);
