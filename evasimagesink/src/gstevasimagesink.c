@@ -647,7 +647,7 @@ evas_image_sink_cb_pipe (void *data, int *buffer_index, unsigned int nbyte)
 		gst_buffer_unmap(buf, &buf_info);
 		gst_buffer_unref (buf);
 	} else {
-	    gst_buffer_map(buf, &buf_info, GST_MAP_READ);
+		gst_buffer_map(buf, &buf_info, GST_MAP_READ);
 		GST_DEBUG ("buf_info.data(buf):%x, esink->eo(%x)",buf_info.data,esink->eo);
 		evas_object_image_data_set (esink->eo, buf_info.data);
 		gst_buffer_unmap(buf, &buf_info);
@@ -1531,6 +1531,13 @@ gst_evas_image_sink_show_frame (GstVideoSink *video_sink, GstBuffer *buf)
 			GST_ERROR ("ecore-pipe create failed");
 			g_mutex_unlock (instance_lock);
 			return GST_FLOW_ERROR;
+		} else {
+			/* If PROP_EVAS_OBJECT_SHOW is set before the first frame,
+			 * evas_object_show() is not called
+			 * Because the first freme is not recieved, ecore pipe is not created.
+			 */
+			if(esink->object_show && esink->eo)
+				evas_object_show(esink->eo);
 		}
 		GST_DEBUG("ecore-pipe create success");
 	}
@@ -1958,7 +1965,7 @@ FLUSH_BUFFER_FAILED:
  static void _release_flush_buffer(GstEvasImageSink *esink)
 {
 	if (esink == NULL ||
-	    esink->flush_buffer == NULL) {
+		esink->flush_buffer == NULL) {
 		GST_WARNING("handle is NULL");
 		return;
 	}
