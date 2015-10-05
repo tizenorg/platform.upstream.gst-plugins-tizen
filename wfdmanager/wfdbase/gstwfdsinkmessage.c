@@ -43,6 +43,7 @@
 #define REPLACE_STRING(field, val)      FREE_STRING(field); (field) = g_strdup(val);
 #define EDID_BLOCK_SIZE 128
 #define EDID_BLOCK_COUNT_MAX_SIZE 256
+#define MAX_PORT_SIZE 65535
 
 enum {
   GST_WFD_SESSION,
@@ -1415,9 +1416,11 @@ GstWFDResult gst_wfd_message_get_prefered_video_format(GstWFDMessage *msg, GstWF
 GstWFDResult gst_wfd_message_set_contentprotection_type(GstWFDMessage *msg, GstWFDHDCPProtection hdcpversion, guint32 TCPPort)
 {
   g_return_val_if_fail(msg != NULL, GST_WFD_EINVAL);
+  g_return_val_if_fail(TCPPort <= MAX_PORT_SIZE, GST_WFD_EINVAL);
 
   if (!msg->content_protection) msg->content_protection = g_new0(GstWFDContentProtection, 1);
   if (hdcpversion == GST_WFD_HDCP_NONE) return GST_WFD_OK;
+
   msg->content_protection->hdcp2_spec = g_new0(GstWFDHdcp2Spec, 1);
   if (hdcpversion == GST_WFD_HDCP_2_0) msg->content_protection->hdcp2_spec->hdcpversion = g_strdup(GST_STRING_WFD_HDCP2_0);
   else if (hdcpversion == GST_WFD_HDCP_2_1) msg->content_protection->hdcp2_spec->hdcpversion = g_strdup(GST_STRING_WFD_HDCP2_1);
@@ -1467,7 +1470,7 @@ GstWFDResult gst_wfd_message_set_display_EDID(GstWFDMessage *msg, gboolean edid_
   if (edid_blockcount > 0 && edid_blockcount <= EDID_BLOCK_COUNT_MAX_SIZE) {
     msg->display_edid->edid_block_count = edid_blockcount;
     msg->display_edid->edid_payload = g_malloc(EDID_BLOCK_SIZE * edid_blockcount);
-    if (!msg->display_edid->edid_payload)
+    if (msg->display_edid->edid_payload)
       memcpy(msg->display_edid->edid_payload, edid_playload, EDID_BLOCK_SIZE * edid_blockcount);
     else
       msg->display_edid->edid_supported = FALSE;
@@ -1484,22 +1487,21 @@ GstWFDResult gst_wfd_message_get_display_EDID(GstWFDMessage *msg, gboolean *edid
   g_return_val_if_fail(edid_blockcount != NULL, GST_WFD_EINVAL);
   g_return_val_if_fail(edid_playload != NULL, GST_WFD_EINVAL);
 
+  *edid_supported = FALSE;
   if (msg->display_edid) {
     if (msg->display_edid->edid_supported) {
       *edid_blockcount = msg->display_edid->edid_block_count;
-      if (msg->display_edid->edid_block_count > 0) {
+      if (msg->display_edid->edid_block_count > 0 && msg->display_edid->edid_block_count <= EDID_BLOCK_COUNT_MAX_SIZE) {
         char *temp;
         temp = g_malloc0(EDID_BLOCK_SIZE * msg->display_edid->edid_block_count);
         if (temp) {
           memcpy(temp, msg->display_edid->edid_payload, EDID_BLOCK_SIZE * msg->display_edid->edid_block_count);
           *edid_playload = temp;
           *edid_supported = TRUE;
-        } else {
-          *edid_supported = FALSE;
         }
-      } else *edid_supported = FALSE;
+      }
     }
-  } else *edid_supported = FALSE;
+  }
   return GST_WFD_OK;
 }
 
