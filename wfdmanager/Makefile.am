@@ -16,7 +16,7 @@ libgstwfdmanager_la_SOURCES = gstwfdmanager.c \
 libgstwfdmanager_la_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_CFLAGS)
 
 libgstwfdmanager_la_LIBADD = $(GST_LIBS) $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) \
-		-lgstrtp-@GST_API_VERSION@ -lgstrtsp-@GST_API_VERSION@ \
+		-lgstrtp-@GST_MAJORMINOR@ -lgstrtsp-@GST_MAJORMINOR@ \
 		$(top_builddir)/wfdmanager/wfdbase/libgstwfdbase.la
 
 libgstwfdmanager_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
