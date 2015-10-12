@@ -70,10 +70,6 @@ cp -rf %{_builddir}/%{name}-%{version}/COPYING %{buildroot}%{_datadir}/license/%
 %files
 %manifest gst-plugins-tizen1.0.manifest
 %defattr(-,root,root,-)
-<<<<<<< HEAD
 %{_libdir}/gstreamer-%{gst_branch}/*.so
-=======
 %{_libdir}/libgstwfdbase.so*
-%{_libdir}/gstreamer-1.0/*.so
->>>>>>> ef7394e... [wfdmanager] Change the structure of Wi-Fi display sink's source element for making possible to be inherited
 %{_datadir}/license/%{name}
