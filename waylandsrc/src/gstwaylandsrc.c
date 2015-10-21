@@ -658,12 +658,15 @@ gst_wayland_src_capture_thread (GstWaylandSrc * src)
 
   /* thread loop */
   while (!src->thread_return) {
+    /* Workaround fix for blocking issue when getting ARGB */
+    gint timeout = (src->use_tbm == FOURCC_NV12) ? -1 : 5;
+
     while (wl_display_prepare_read_queue (src->display, src->queue) != 0)
       wl_display_dispatch_queue_pending (src->display, src->queue);
 
     wl_display_flush (src->display);
 
-    if (poll (&pfd, 1, -1) < 0) {
+    if (poll (&pfd, 1, timeout) < 0) {
       wl_display_cancel_read (src->display);
       break;
     } else {
