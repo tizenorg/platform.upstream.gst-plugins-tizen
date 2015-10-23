@@ -168,6 +168,29 @@ static const struct tizen_screenmirror_listener mirror_listener = {
   mirror_handle_stop
 };
 
+#define ALIGN(x, a)       (((x) + (a) - 1) & ~((a) - 1))
+#define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
+
+int calc_yplane(int width, int height)
+{
+    int mbX, mbY;
+
+    mbX = DIV_ROUND_UP(width, 16);
+    mbY = DIV_ROUND_UP(height, 16);
+
+    return (ALIGN((mbX * mbY) * 256, 256) + 256);
+}
+
+int calc_uvplane(int width, int height)
+{
+    int mbX, mbY;
+
+    mbX = DIV_ROUND_UP(width, 16);
+    mbY = DIV_ROUND_UP(height, 16);
+
+    return (ALIGN((mbX * mbY) * 128, 256) + 128);
+}
+
 static void
 mirror_handle_dequeued (void *data,
     struct tizen_screenmirror *tizen_screenmirror, struct wl_buffer *buffer)
@@ -261,8 +284,8 @@ mirror_handle_dequeued (void *data,
         mm_video_buf->handle.bo[1] = out_buffer->bo[1];
         GST_INFO_OBJECT (src, "BO : %p %p", mm_video_buf->handle.bo[0], mm_video_buf->handle.bo[1]);
 
-        mm_video_buf->size[0] = (src->width * src->height);
-        mm_video_buf->size[1] = (src->width * (src->height >> 1));
+        mm_video_buf->size[0] = calc_yplane(src->width, src->height); /*(src->width * src->height);*/
+        mm_video_buf->size[1] = calc_uvplane(src->width, src->height); /*(src->width * (src->height >> 1));*/
         mm_video_buf->width[0] = src->width;
         mm_video_buf->height[0] = src->height;
         mm_video_buf->format = MM_PIXEL_FORMAT_NV12;
@@ -557,10 +580,10 @@ tbm_buffer_create (GstWaylandSrc * src)
       info.bpp = tbm_surface_internal_get_bpp(info.format);
       info.num_planes = 2;
       info.planes[0].stride = info.width;
-      info.planes[0].size = info.planes[0].stride * info.height;
+      info.planes[0].size = calc_yplane(info.planes[0].stride, info.height);//info.planes[0].stride * info.height
       info.planes[0].offset = 0;
       info.planes[1].stride = info.width;
-      info.planes[1].size = info.planes[1].stride * (info.height >> 1);
+      info.planes[1].size = calc_uvplane(info.planes[1].stride, info.height);//info.planes[1].stride * (info.height >> 1);
       info.planes[1].offset = 0;
       info.size = info.planes[0].size + info.planes[1].size;
 
