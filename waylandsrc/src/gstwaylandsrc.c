@@ -168,27 +168,75 @@ static const struct tizen_screenmirror_listener mirror_listener = {
   mirror_handle_stop
 };
 
-#define ALIGN(x, a)       (((x) + (a) - 1) & ~((a) - 1))
-#define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
-
-int calc_yplane(int width, int height)
+int new_calc_plane(int width, int height)
 {
     int mbX, mbY;
 
-    mbX = DIV_ROUND_UP(width, 16);
-    mbY = DIV_ROUND_UP(height, 16);
+    mbX = DIV_ROUND_UP(width, S5P_FIMV_NUM_PIXELS_IN_MB_ROW);
+    mbY = DIV_ROUND_UP(height, S5P_FIMV_NUM_PIXELS_IN_MB_COL);
 
-    return (ALIGN((mbX * mbY) * 256, 256) + 256);
+    if (width * height < S5P_FIMV_MAX_FRAME_SIZE)
+      mbY = (mbY + 1) / 2 * 2;
+
+    return ((mbX * S5P_FIMV_NUM_PIXELS_IN_MB_COL) *
+     (mbY * S5P_FIMV_NUM_PIXELS_IN_MB_ROW));
 }
 
-int calc_uvplane(int width, int height)
+int new_calc_yplane(int width, int height)
+{
+    return (ALIGN_TO_4KB(new_calc_plane(width, height) +
+              S5P_FIMV_D_ALIGN_PLANE_SIZE));
+}
+
+int new_calc_uvplane(int width, int height)
+{
+    return (ALIGN_TO_4KB((new_calc_plane(width, height) >> 1) +
+              S5P_FIMV_D_ALIGN_PLANE_SIZE));
+}
+
+int
+calc_plane(int width, int height)
 {
     int mbX, mbY;
 
-    mbX = DIV_ROUND_UP(width, 16);
-    mbY = DIV_ROUND_UP(height, 16);
+    mbX = ALIGN(width, S5P_FIMV_NV12MT_HALIGN);
+    mbY = ALIGN(height, S5P_FIMV_NV12MT_VALIGN);
 
-    return (ALIGN((mbX * mbY) * 128, 256) + 128);
+    return ALIGN(mbX * mbY, S5P_FIMV_DEC_BUF_ALIGN);
+}
+
+int
+calc_yplane(int width, int height)
+{
+    int mbX, mbY;
+
+    mbX = ALIGN(width + 24, S5P_FIMV_NV12MT_HALIGN);
+    mbY = ALIGN(height + 16, S5P_FIMV_NV12MT_VALIGN);
+
+    return ALIGN(mbX * mbY, S5P_FIMV_DEC_BUF_ALIGN);
+}
+
+int
+calc_uvplane(int width, int height)
+{
+    int mbX, mbY;
+
+    mbX = ALIGN(width + 16, S5P_FIMV_NV12MT_HALIGN);
+    mbY = ALIGN(height + 4, S5P_FIMV_NV12MT_VALIGN);
+
+    return ALIGN(mbX * mbY, S5P_FIMV_DEC_BUF_ALIGN);
+}
+
+int
+gst_calculate_y_size(int width, int height)
+{
+   return CHOOSE_MAX_SIZE(calc_yplane(width,height),new_calc_yplane(width,height));
+}
+
+int
+gst_calculate_uv_size(int width, int height)
+{
+   return CHOOSE_MAX_SIZE(calc_uvplane(width,height),new_calc_uvplane(width,height));
 }
 
 static void
@@ -295,8 +343,8 @@ mirror_handle_dequeued (void *data,
         mm_video_buf->handle.bo[1] = out_buffer->bo[1];
         GST_INFO_OBJECT (src, "BO : %p %p", mm_video_buf->handle.bo[0], mm_video_buf->handle.bo[1]);
 
-        mm_video_buf->size[0] = calc_yplane(src->width, src->height); /*(src->width * src->height);*/
-        mm_video_buf->size[1] = calc_uvplane(src->width, src->height); /*(src->width * (src->height >> 1));*/
+        mm_video_buf->size[0] = gst_calculate_y_size(src->width, src->height); /*(src->width * src->height);*/
+        mm_video_buf->size[1] = gst_calculate_uv_size(src->width, src->height); /*(src->width * (src->height >> 1));*/
         mm_video_buf->width[0] = src->width;
         mm_video_buf->height[0] = src->height;
         mm_video_buf->format = MM_PIXEL_FORMAT_NV12;
@@ -591,10 +639,10 @@ tbm_buffer_create (GstWaylandSrc * src)
       info.bpp = tbm_surface_internal_get_bpp(info.format);
       info.num_planes = 2;
       info.planes[0].stride = info.width;
-      info.planes[0].size = calc_yplane(info.planes[0].stride, info.height);//info.planes[0].stride * info.height
+      info.planes[0].size = gst_calculate_y_size(info.planes[0].stride, info.height);//info.planes[0].stride * info.height
       info.planes[0].offset = 0;
       info.planes[1].stride = info.width;
-      info.planes[1].size = calc_uvplane(info.planes[1].stride, info.height);//info.planes[1].stride * (info.height >> 1);
+      info.planes[1].size = gst_calculate_uv_size(info.planes[1].stride, info.height);//info.planes[1].stride * (info.height >> 1);
       info.planes[1].offset = 0;
       info.size = info.planes[0].size + info.planes[1].size;
 
