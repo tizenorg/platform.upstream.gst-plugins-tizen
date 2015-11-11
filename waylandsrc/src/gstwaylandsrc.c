@@ -202,15 +202,26 @@ mirror_handle_dequeued (void *data,
   GstClockTime base_time, next_capture_ts;
   gint64 next_frame_no;
 
-  clock = gst_element_get_clock (GST_ELEMENT (src));
-  if (!clock) {
-    GST_ERROR_OBJECT (src, "Failed to get clock");
-    return;
-  }
-
   wl_list_for_each (out_buffer, &src->buffer_list, link) {
     if (out_buffer->wl_buffer != buffer)
       continue;
+
+    clock = gst_element_get_clock (GST_ELEMENT (src));
+    if (!clock) {
+      GST_WARNING_OBJECT (src, "Failed to get clock");
+      if (src->use_tbm) {
+        if (out_buffer->bo[0])
+          tbm_bo_unmap (out_buffer->bo[0]);
+        if (out_buffer->bo[1])
+          tbm_bo_unmap (out_buffer->bo[1]);
+      }
+      GST_DEBUG ("Buffer [%d] queued",
+          wl_proxy_get_id ((struct wl_proxy *) out_buffer->wl_buffer));
+      wl_display_sync (src->display);
+
+      tizen_screenmirror_queue (src->screenmirror, out_buffer->wl_buffer);
+      return;
+    }
 
     base_time = gst_element_get_base_time (GST_ELEMENT (src));
     next_capture_ts = gst_clock_get_time (clock) - base_time;
@@ -649,6 +660,7 @@ gst_wayland_src_capture_thread (GstWaylandSrc * src)
   struct output *output = NULL;
   struct output_buffer *out_buffer = NULL;
   int i;
+  gint timeout;
 
   output = gst_wayland_src_active_output (src);
   if (!output)
@@ -680,9 +692,9 @@ gst_wayland_src_capture_thread (GstWaylandSrc * src)
   pfd.events = POLLIN;
 
   /* thread loop */
+  timeout = (src->format == FOURCC_NV12) ? -1 : 5;
   while (!src->thread_return) {
     /* Workaround fix for blocking issue when getting ARGB */
-    gint timeout = (src->use_tbm == FOURCC_NV12) ? -1 : 5;
 
     while (wl_display_prepare_read_queue (src->display, src->queue) != 0)
       wl_display_dispatch_queue_pending (src->display, src->queue);
