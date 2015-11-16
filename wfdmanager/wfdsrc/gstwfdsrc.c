@@ -422,7 +422,7 @@ cleanup:
 }
 
 static void
-on_bye_ssrc (GObject * session, GObject * source, GstWFDSrc *src)
+on_bye_ssrc (GObject * session, guint32 ssrc, GstWFDSrc *src)
 {
   GST_DEBUG_OBJECT (src, "source in session received BYE");
 
@@ -430,13 +430,13 @@ on_bye_ssrc (GObject * session, GObject * source, GstWFDSrc *src)
 }
 
 static void
-on_new_ssrc (GObject * session, GObject * source, GstWFDSrc *src)
+on_new_ssrc (GObject * session, guint32 ssrc, GstWFDSrc *src)
 {
   GST_DEBUG_OBJECT (src, "source in session received NEW");
 }
 
 static void
-on_timeout (GObject * session, GObject * source, GstWFDSrc *src)
+on_timeout (GObject * session, guint32 ssrc, GstWFDSrc *src)
 {
   GST_DEBUG_OBJECT (src, "source in session timed out");
 
@@ -444,7 +444,7 @@ on_timeout (GObject * session, GObject * source, GstWFDSrc *src)
 }
 
 static void
-on_ssrc_active (GObject * session, GObject * source, GstWFDSrc *src)
+on_ssrc_active (GObject * session, guint32 ssrc, GstWFDSrc *src)
 {
   GST_DEBUG_OBJECT (src, "source in session  is active");
 }
@@ -467,11 +467,11 @@ request_pt_map_for_wfdrtpbuffer (GstElement * wfdrtpbuffer, guint pt, GstWFDSrc 
 }
 
 static GstCaps *
-request_pt_map_for_session (GstElement * session, guint session_id, guint pt, GstWFDSrc *src)
+request_pt_map_for_session (GstElement * session, guint pt, GstWFDSrc *src)
 {
   GstCaps *caps;
 
-  GST_DEBUG_OBJECT (src, "getting pt map for pt %d in session %d", pt, session_id);
+  GST_DEBUG_OBJECT (src, "getting pt map for pt %d", pt);
 
   GST_WFD_BASE_STATE_LOCK (src);
   caps = GST_WFD_BASE_SRC_CAST(src)->caps;
