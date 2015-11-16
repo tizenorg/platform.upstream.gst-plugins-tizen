@@ -861,6 +861,21 @@ get_current_system_time ()
 }
 #endif
 
+#define XVIMAGESRC_SLEEP(msec) \
+do { \
+  if(msec) { \
+    unsigned long sec_t = 0; \
+    unsigned long nsec_t = 0; \
+    unsigned long cal_time = msec * 1000000; \
+    sec_t = cal_time / 1000000000; \
+    nsec_t = cal_time % 1000000000; \
+    struct timespec reqtime; \
+    reqtime.tv_sec = sec_t; \
+    reqtime.tv_nsec = nsec_t; \
+    nanosleep(&reqtime, NULL); \
+  } \
+} while (0)
+
 static void
 gst_xv_get_image_sleep (void *asrc, long duration)
 {
@@ -890,7 +905,8 @@ gst_xv_get_image_sleep (void *asrc, long duration)
 
     if (sleep_time > 0) {
       GST_INFO ("end_time : sleep_time = %ld", sleep_time);
-      usleep (sleep_time);
+      sleep_time = sleep_time / 1000;
+      XVIMAGESRC_SLEEP (sleep_time);
     }
   }
 }
