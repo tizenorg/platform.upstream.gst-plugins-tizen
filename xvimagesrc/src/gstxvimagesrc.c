@@ -1331,12 +1331,6 @@ gst_xv_image_src_update_thread (void *asrc)
       XV_DATA_PTR data = (XV_DATA_PTR) src->virtual;
       int error = XV_VALIDATE_DATA (data);
 
-      outbuf = gst_xv_image_out_buffer_new (src);
-      if (!outbuf) {
-        GST_ERROR ("Out of memory");
-        continue;
-      }
-
       if (error == XV_HEADER_ERROR)
         GST_ERROR ("XV_HEADER_ERROR\n");
       else if (error == XV_VERSION_MISMATCH)
@@ -1346,9 +1340,18 @@ gst_xv_image_src_update_thread (void *asrc)
         mm_video_buf = (MMVideoBuffer *) malloc (sizeof (MMVideoBuffer));
         if (mm_video_buf == NULL) {
           GST_ERROR_OBJECT (src, "failed to alloc MMVideoBuffer");
-          return NULL;
+          continue;
         }
+
+        outbuf = gst_xv_image_out_buffer_new (src);
+        if (!outbuf) {
+          GST_ERROR ("Out of memory");
+          g_free (mm_video_buf);
+          continue;
+        }
+
         memset (mm_video_buf, 0x00, sizeof (MMVideoBuffer));
+
         if (data->BufType == XV_BUF_TYPE_LEGACY) {
           GST_DEBUG ("XV_BUF_TYPE_LEGACY");
           mm_video_buf->handle.paddr[0] = (void *) data->YBuf;
@@ -1649,6 +1652,8 @@ bufmgr_get (Display * dpy, Pixmap pixmap)
   if (driverName)
     Xfree (driverName);
 
+  if (!deviceName) return NULL;
+
   GST_DEBUG ("Open drm device : %s", deviceName);
 
   // get the drm_fd though opening the deviceName
@@ -1660,6 +1665,9 @@ bufmgr_get (Display * dpy, Pixmap pixmap)
     return NULL;
   }
 
+  if (deviceName)
+    Xfree (deviceName);
+
   struct drm_exynos_vidi_connection vidi;
 
   vidi.connection = 1;
@@ -1667,9 +1675,6 @@ bufmgr_get (Display * dpy, Pixmap pixmap)
   vidi.edid = (uint64_t *)fake_edid_info;
 
   ioctl (drm_fd, DRM_IOCTL_EXYNOS_VIDI_CONNECTION, &vidi);
-
-  if (deviceName)
-    Xfree (deviceName);
 
   /* get the drm magic */
   drmGetMagic (drm_fd, &magic);
