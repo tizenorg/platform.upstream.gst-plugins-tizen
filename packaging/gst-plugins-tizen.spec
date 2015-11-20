@@ -1,3 +1,4 @@
+%bcond_with wayland
 %bcond_with x
 %define gst_branch 1.0
 
@@ -27,10 +28,6 @@ BuildRequires:	pkgconfig(xv)
 BuildRequires:	pkgconfig(xdamage)
 BuildRequires:	pkgconfig(xfixes)
 BuildRequires:	pkgconfig(dri2proto)
-%else
-BuildRequires:	pkgconfig(wayland-client)
-BuildRequires:	pkgconfig(wayland-tbm-client)
-BuildRequires:	pkgconfig(tizen-extension-client)
 %endif
 BuildRequires:	pkgconfig(libdrm)
 BuildRequires:	pkgconfig(libdrm_exynos)
@@ -38,6 +35,12 @@ BuildRequires:  pkgconfig(libtbm)
 BuildRequires:	libdrm-devel
 BuildRequires:  pkgconfig(vconf)
 BuildRequires:  pkgconfig(mm-common)
+%if %{with wayland}
+BuildRequires:  pkgconfig(wayland-client) >= 1.0.0
+BuildRequires:  pkgconfig(wayland-tbm-client)
+BuildRequires:  pkgconfig(tizen-extension-client)
+BuildRequires:  pkgconfig(gstreamer-wayland-1.0)
+%endif
 
 %description
 GStreamer tizen plugins (common)
@@ -47,12 +50,13 @@ GStreamer tizen plugins (common)
 
 
 %build
-export CFLAGS+=" -DGST_EXT_TIME_ANALYSIS -DGST_EXT_XV_ENHANCEMENT -DEXPORT_API=\"__attribute__((visibility(\\\"default\\\")))\" "
+export CFLAGS+=" -DGST_EXT_TIME_ANALYSIS -DGST_EXT_XV_ENHANCEMENT -DGST_WLSINK_ENHANCEMENT -DEXPORT_API=\"__attribute__((visibility(\\\"default\\\")))\" "
 
 ./autogen.sh --disable-static
 %configure \
 %if %{with x}
 	--disable-waylandsrc\
+	--disable-waylandsink\
 %else
 	--disable-xvimagesrc\
 %endif

@@ -478,6 +478,26 @@ AC_ARG_ENABLE(drmdecryptor, AC_HELP_STRING([--enable-drmdecryptor], [using drmde
  [GST_TIZEN_USE_DRMDECRYPTOR=yes])
 AM_CONDITIONAL(GST_TIZEN_USE_DRMDECRYPTOR, test "x$GST_TIZEN_USE_DRMDECRYPTOR" = "xyes")
 
+dnl use waylandsink --------------------------------------------------------------------------
+AC_ARG_ENABLE(waylandsink, AC_HELP_STRING([--enable-waylandsink], [using waylandsink]),
+[
+ case "${enableval}" in
+         yes) GST_TIZEN_USE_WAYLANDSINK=yes ;;
+         no)  GST_TIZEN_USE_WAYLANDSINK=no ;;
+         *)   AC_MSG_ERROR(bad value ${enableval} for --enable-waylandsink) ;;
+ esac
+ ],
+ [GST_TIZEN_USE_WAYLANDSINK=yes])
+AM_CONDITIONAL([GST_TIZEN_USE_WAYLANDSINK], [test "x$GST_TIZEN_USE_WAYLANDSINK" = "xyes"])
+if test "x$GST_TIZEN_USE_WAYLANDSINK" = "xyes"; then
+PKG_CHECK_MODULES(GST_WAYLAND, gstreamer-wayland-1.0 >= 1.2.0)
+AC_SUBST(GST_WAYLAND_CFLAGS)
+AC_SUBST(GST_WAYLAND_LIBS)
+
+PKG_CHECK_MODULES(WAYLAND, wayland-client >= 1.4.0 wayland-tbm-client tizen-extension-client wayland-scanner)
+AC_PATH_PROG([wayland_scanner], [wayland-scanner])
+fi
+
 AC_OUTPUT(
 Makefile
 common/Makefile
@@ -508,4 +528,6 @@ waylandsrc/Makefile
 waylandsrc/src/Makefile
 drmdecryptor/Makefile
 drmdecryptor/src/Makefile
+waylandsink/Makefile
+waylandsink/src/Makefile
 )
