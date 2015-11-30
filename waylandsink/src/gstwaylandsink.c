@@ -1357,15 +1357,15 @@ plugin_init (GstPlugin * plugin)
 {
   FUNCTION_ENTER ();
 
-  GST_DEBUG_CATEGORY_INIT (gsttizenwl_debug, "tizenwlsink", 0,
+  GST_DEBUG_CATEGORY_INIT (gsttizenwl_debug, "waylandsink", 0,
       " temporary wayland video sink");
 
-  return gst_element_register (plugin, "tizenwlsink", GST_RANK_MARGINAL,
+  return gst_element_register (plugin, "waylandsink", GST_RANK_MARGINAL,
       GST_TYPE_WAYLAND_SINK);
 }
 
 GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
-    tizenwlsink,
-    "Wayland Video Sink", plugin_init, VERSION, "LGPL", GST_PACKAGE_NAME,
+    waylandsink,
+    "Temporary Wayland Video Sink", plugin_init, VERSION, "LGPL", GST_PACKAGE_NAME,
     GST_PACKAGE_ORIGIN)

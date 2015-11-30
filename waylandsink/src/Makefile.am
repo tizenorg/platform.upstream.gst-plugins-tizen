@@ -1,6 +1,6 @@
-plugin_LTLIBRARIES = libgsttizenwlsink.la
+plugin_LTLIBRARIES = libgstwaylandsink.la
 
-libgsttizenwlsink_la_SOURCES =  \
+libgstwaylandsink_la_SOURCES =  \
 	gstwaylandsink.c \
 	waylandpool.c \
 	wldisplay.c \
@@ -9,15 +9,15 @@ libgsttizenwlsink_la_SOURCES =  \
 	scaler-protocol.c \
 	tizen-wlvideoformat.c
 
-libgsttizenwlsink_la_CFLAGS = $(GST_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) \
+libgstwaylandsink_la_CFLAGS = $(GST_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) \
                                $(WAYLAND_CFLAGS) $(GST_PLUGINS_BAD_CFLAGS) $(DRM_CFLAGS) $(TBM_CFLAGS) $(MMCOMMON_CFLAGS) \
 							   $(GST_WAYLAND_CFLAGS)
-libgsttizenwlsink_la_LIBADD = \
+libgstwaylandsink_la_LIBADD = \
 	$(GST_PLUGINS_BASE_LIBS) \
 	-lgstvideo-$(GST_MAJORMINOR) \
 	$(WAYLAND_LIBS) $(DRM_LIBS) $(TBM_LIBS) $(GST_WAYLAND_LIBS)
-libgsttizenwlsink_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
-libgsttizenwlsink_la_LIBTOOLFLAGS = $(GST_PLUGIN_LIBTOOLFLAGS)
+libgstwaylandsink_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
+libgstwaylandsink_la_LIBTOOLFLAGS = $(GST_PLUGIN_LIBTOOLFLAGS)
 
 noinst_HEADERS = \
 	gstwaylandsink.h \
