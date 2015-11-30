@@ -90,6 +90,10 @@ gst_wl_window_finalize (GObject * gobject)
 
   GstWlWindow *self = GST_WL_WINDOW (gobject);
 
+#ifdef GST_WLSINK_ENHANCEMENT
+  tizen_video_object_destroy (self->video_object);
+#endif
+
   if (self->shell_surface) {
     wl_shell_surface_destroy (self->shell_surface);
   }
@@ -129,6 +133,10 @@ gst_wl_window_new_internal (GstWlDisplay * display, struct wl_surface *surface)
   region = wl_compositor_create_region (display->compositor);
   wl_surface_set_input_region (surface, region);
   wl_region_destroy (region);
+
+#ifdef GST_WLSINK_ENHANCEMENT
+  window->video_object = tizen_video_get_object(display->tizen_video, window->surface);
+#endif
 
   return window;
 }

@@ -56,6 +56,8 @@ struct _GstWlWindow
   /* the size of the (sub)surface */
   gint surface_width, surface_height;
 #ifdef GST_WLSINK_ENHANCEMENT
+  struct tizen_video_object *video_object;
+
   /*Display geometry method */
   guint disp_geo_method;
   guint rotate_angle;
