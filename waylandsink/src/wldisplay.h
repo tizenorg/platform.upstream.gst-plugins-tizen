@@ -76,6 +76,8 @@ struct _GstWlDisplay
   tbm_bufmgr tbm_bufmgr;
   tbm_bo tbm_bo;
 
+  int need_shell_surface;
+
   gboolean is_native_format;    /*SN12, ST12 */
   void *bo[NV_BUF_PLANE_NUM];
   int plane_size[NV_BUF_PLANE_NUM];

@@ -127,6 +127,13 @@ gst_wl_window_new_internal (GstWlDisplay * display, struct wl_surface *surface)
   /* make sure the surface runs on our local queue */
   wl_proxy_set_queue ((struct wl_proxy *) surface, display->queue);
 
+#ifdef GST_WLSINK_ENHANCEMENT
+  /* create shell_surface here for enlightenment */
+  if (display->need_shell_surface)
+    window->shell_surface = wl_shell_get_shell_surface (display->shell,
+        window->area_surface);
+#endif
+ 
   window->viewport = wl_scaler_get_viewport (display->scaler, window->surface);
 
   /* do not accept input */
@@ -155,8 +162,13 @@ gst_wl_window_new_toplevel (GstWlDisplay * display, GstVideoInfo * video_info)
   gst_wl_window_set_render_rectangle (window, 0, 0, window->video_width,
       window->video_height);
 
+#ifdef GST_WLSINK_ENHANCEMENT
+  /* not create shell_surface here for enlightenment */
+  display->need_shell_surface = TRUE;
+#else
   window->shell_surface = wl_shell_get_shell_surface (display->shell,
       window->surface);
+#endif
 
   if (window->shell_surface) {
     wl_shell_surface_add_listener (window->shell_surface,
