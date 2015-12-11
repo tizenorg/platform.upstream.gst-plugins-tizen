@@ -155,6 +155,9 @@ gst_wl_window_new_toplevel (GstWlDisplay * display, GstVideoInfo * video_info)
 
   GstWlWindow *window;
 
+  /* not create shell_surface here for enlightenment */
+  display->need_shell_surface = TRUE;
+
   window = gst_wl_window_new_internal (display,
       wl_compositor_create_surface (display->compositor));
 
@@ -162,12 +165,10 @@ gst_wl_window_new_toplevel (GstWlDisplay * display, GstVideoInfo * video_info)
   gst_wl_window_set_render_rectangle (window, 0, 0, window->video_width,
       window->video_height);
 
-#ifdef GST_WLSINK_ENHANCEMENT
-  /* not create shell_surface here for enlightenment */
-  display->need_shell_surface = TRUE;
-#else
-  window->shell_surface = wl_shell_get_shell_surface (display->shell,
-      window->surface);
+#ifndef GST_WLSINK_ENHANCEMENT
+	/* go toplevel */
+	window->shell_surface = wl_shell_get_shell_surface (display->shell,
+		window->area_surface);
 #endif
 
   if (window->shell_surface) {
