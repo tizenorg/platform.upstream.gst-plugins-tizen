@@ -168,27 +168,75 @@ static const struct tizen_screenmirror_listener mirror_listener = {
   mirror_handle_stop
 };
 
-#define ALIGN(x, a)       (((x) + (a) - 1) & ~((a) - 1))
-#define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
-
-int calc_yplane(int width, int height)
+int new_calc_plane(int width, int height)
 {
     int mbX, mbY;
 
-    mbX = DIV_ROUND_UP(width, 16);
-    mbY = DIV_ROUND_UP(height, 16);
+    mbX = DIV_ROUND_UP(width, S5P_FIMV_NUM_PIXELS_IN_MB_ROW);
+    mbY = DIV_ROUND_UP(height, S5P_FIMV_NUM_PIXELS_IN_MB_COL);
 
-    return (ALIGN((mbX * mbY) * 256, 256) + 256);
+    if (width * height < S5P_FIMV_MAX_FRAME_SIZE)
+      mbY = (mbY + 1) / 2 * 2;
+
+    return ((mbX * S5P_FIMV_NUM_PIXELS_IN_MB_COL) *
+     (mbY * S5P_FIMV_NUM_PIXELS_IN_MB_ROW));
 }
 
-int calc_uvplane(int width, int height)
+int new_calc_yplane(int width, int height)
+{
+    return (ALIGN_TO_4KB(new_calc_plane(width, height) +
+              S5P_FIMV_D_ALIGN_PLANE_SIZE));
+}
+
+int new_calc_uvplane(int width, int height)
+{
+    return (ALIGN_TO_4KB((new_calc_plane(width, height) >> 1) +
+              S5P_FIMV_D_ALIGN_PLANE_SIZE));
+}
+
+int
+calc_plane(int width, int height)
 {
     int mbX, mbY;
 
-    mbX = DIV_ROUND_UP(width, 16);
-    mbY = DIV_ROUND_UP(height, 16);
+    mbX = ALIGN(width, S5P_FIMV_NV12MT_HALIGN);
+    mbY = ALIGN(height, S5P_FIMV_NV12MT_VALIGN);
 
-    return (ALIGN((mbX * mbY) * 128, 256) + 128);
+    return ALIGN(mbX * mbY, S5P_FIMV_DEC_BUF_ALIGN);
+}
+
+int
+calc_yplane(int width, int height)
+{
+    int mbX, mbY;
+
+    mbX = ALIGN(width + 24, S5P_FIMV_NV12MT_HALIGN);
+    mbY = ALIGN(height + 16, S5P_FIMV_NV12MT_VALIGN);
+
+    return ALIGN(mbX * mbY, S5P_FIMV_DEC_BUF_ALIGN);
+}
+
+int
+calc_uvplane(int width, int height)
+{
+    int mbX, mbY;
+
+    mbX = ALIGN(width + 16, S5P_FIMV_NV12MT_HALIGN);
+    mbY = ALIGN(height + 4, S5P_FIMV_NV12MT_VALIGN);
+
+    return ALIGN((mbX * mbY)>>1, S5P_FIMV_DEC_BUF_ALIGN);
+}
+
+int
+gst_calculate_y_size(int width, int height)
+{
+   return CHOOSE_MAX_SIZE(calc_yplane(width,height),new_calc_yplane(width,height));
+}
+
+int
+gst_calculate_uv_size(int width, int height)
+{
+   return CHOOSE_MAX_SIZE(calc_uvplane(width,height),new_calc_uvplane(width,height));
 }
 
 static void
