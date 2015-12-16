@@ -345,6 +345,16 @@ mirror_handle_dequeued (void *data,
 
         mm_video_buf->size[0] = gst_calculate_y_size(src->width, src->height); /*(src->width * src->height);*/
         mm_video_buf->size[1] = gst_calculate_uv_size(src->width, src->height); /*(src->width * (src->height >> 1));*/
+        GST_INFO_OBJECT (src, "Size : %d %d", mm_video_buf->size[0], mm_video_buf->size[1]);
+
+        mm_video_buf->handle.dmabuf_fd[0] = tbm_bo_get_handle(out_buffer->bo[0], TBM_DEVICE_MM).u32;
+        mm_video_buf->handle.dmabuf_fd[1] = tbm_bo_get_handle(out_buffer->bo[1], TBM_DEVICE_MM).u32;
+
+        mm_video_buf->handle.paddr[0] = (tbm_bo_map(mm_video_buf->handle.bo[0], TBM_DEVICE_CPU,TBM_OPTION_WRITE)).ptr;
+        mm_video_buf->handle.paddr[1] = (tbm_bo_map(mm_video_buf->handle.bo[1], TBM_DEVICE_CPU,TBM_OPTION_WRITE)).ptr;
+        tbm_bo_unmap (mm_video_buf->handle.bo[0]);
+        tbm_bo_unmap (mm_video_buf->handle.bo[1]);
+
         mm_video_buf->width[0] = src->width;
         mm_video_buf->height[0] = src->height;
         mm_video_buf->format = MM_PIXEL_FORMAT_NV12;
