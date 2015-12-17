@@ -61,9 +61,9 @@ if GST_TIZEN_USE_DRMDECRYPTOR
 SUBDIRS += drmdecryptor
 endif
 
-if GST_TIZEN_USE_WAYLANDSINK
-SUBDIRS += waylandsink
-endif
+#if GST_TIZEN_USE_WAYLANDSINK
+#SUBDIRS += waylandsink
+#endif
 
 DIST_SUBDIRS = common
 

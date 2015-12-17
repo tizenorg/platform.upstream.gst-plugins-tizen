@@ -56,7 +56,7 @@ export CFLAGS+=" -DGST_EXT_TIME_ANALYSIS -DGST_EXT_XV_ENHANCEMENT -DGST_WLSINK_E
 %configure \
 %if %{with x}
 	--disable-waylandsrc\
-	--disable-waylandsink\
+#	--disable-waylandsink\
 %else
 	--disable-xvimagesrc\
 %endif
