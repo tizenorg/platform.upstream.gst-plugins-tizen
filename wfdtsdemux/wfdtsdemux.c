@@ -2042,7 +2042,7 @@ gst_wfd_ts_demux_push_pending_data (GstWFDTSDemux * demux, WFDTSDemuxStream * st
       stream->needs_keyframe = FALSE;
     } else {
       base->seek_offset = demux->last_seek_offset - 200 * base->packetsize;
-      if (demux->last_seek_offset < 200 * base->packetsize)
+      if (demux->last_seek_offset < 200 * (guint64)base->packetsize)
         base->seek_offset = 0;
       demux->last_seek_offset = base->seek_offset;
       wfd_ts_packetizer_flush (base->packetizer, FALSE);
