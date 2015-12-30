@@ -8,7 +8,7 @@ Summary:    GStreamer tizen plugins (common)
 Release:    18
 Group:      Multimedia/Framework
 Url:        http://gstreamer.freedesktop.org/
-License:    LGPL-2.1+ and Apache-2.0
+License:    LGPL-2.1+
 Source0:    %{name}-%{version}.tar.gz
 
 #BuildRequires:  pkgconfig(camsrcjpegenc)
