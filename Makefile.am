@@ -61,6 +61,10 @@ if GST_TIZEN_USE_DRMDECRYPTOR
 SUBDIRS += drmdecryptor
 endif
 
+if GST_TIZEN_USE_TIZENIPC
+SUBDIRS += tizenipc
+endif
+
 #if GST_TIZEN_USE_WAYLANDSINK
 #SUBDIRS += waylandsink
 #endif
