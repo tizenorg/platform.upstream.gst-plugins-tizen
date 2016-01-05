@@ -498,6 +498,18 @@ PKG_CHECK_MODULES(WAYLAND, wayland-client >= 1.4.0 wayland-tbm-client tizen-exte
 AC_PATH_PROG([wayland_scanner], [wayland-scanner])
 fi
 
+dnl use tizenipc--------------------------------------------------------------------------
+AC_ARG_ENABLE(tizenipc, AC_HELP_STRING([--enable-tizenipc], [using tizenipc]),
+  [
+    case "${enableval}" in
+      yes) GST_TIZEN_USE_TIZENIPC=yes ;;
+      no)  GST_TIZEN_USE_TIZENIPC=no ;;
+      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-tizenipc) ;;
+    esac
+  ],
+  [GST_TIZEN_USE_TIZENIPC=yes])
+AM_CONDITIONAL(GST_TIZEN_USE_TIZENIPC, test "x$GST_TIZEN_USE_TIZENIPC" = "xyes")
+
 AC_OUTPUT(
 Makefile
 common/Makefile
@@ -530,4 +542,6 @@ drmdecryptor/Makefile
 drmdecryptor/src/Makefile
 waylandsink/Makefile
 waylandsink/src/Makefile
+tizenipc/Makefile
+tizenipc/src/Makefile
 )

@@ -5,7 +5,7 @@
 Name:       gst-plugins-tizen
 Version:    1.0.0
 Summary:    GStreamer tizen plugins (common)
-Release:    18
+Release:    19
 Group:      Multimedia/Framework
 Url:        http://gstreamer.freedesktop.org/
 License:    LGPL-2.1+
