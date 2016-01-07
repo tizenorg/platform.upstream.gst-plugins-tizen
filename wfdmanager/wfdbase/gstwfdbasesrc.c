@@ -136,6 +136,10 @@ enum
 #define DEFAULT_PORT_RANGE       NULL
 #define DEFAULT_USER_AGENT       "TIZEN-WFD-SINK"
 
+#define SOCKET_TCP_KEEPIDLE 5
+#define SOCKET_TCP_KEEPINTVL 2
+#define SOCKET_TCP_KEEPCNT 3
+
 enum
 {
   PROP_0,
@@ -1138,8 +1142,64 @@ connect_retry:
       }
     } else {
       GST_INFO_OBJECT(src, "Connection success");
-    }
+      gint fd = 0;
+      int optval = 0;
+      int optlen = sizeof(int);
+      GSocket* socket = gst_rtsp_connection_get_write_socket(info->connection);
 
+      if(socket != NULL) {
+        fd = g_socket_get_fd (socket);
+        if(fd == 0) {
+          GST_INFO_OBJECT(src, "fd(write) is null");
+        }
+        else {
+          optval = 1;
+          if(setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (void*)&optval, sizeof(optval)) < 0) {
+            GST_INFO_OBJECT(src, "Error set socket SO_KEEPALIVE value to TRUE");
+          }
+
+          optval = SOCKET_TCP_KEEPIDLE;
+          if(setsockopt(fd, IPPROTO_TCP, 4/*TCP_KEEPIDLE*/, (void*)&optval, sizeof(optval)) < 0) {
+            GST_INFO_OBJECT(src, "Error set socket TCP_KEEPIDLE value");
+          }
+
+          optval = SOCKET_TCP_KEEPINTVL;
+          if(setsockopt(fd, IPPROTO_TCP, 5/*TCP_KEEPINTVL*/, (void*)&optval, sizeof(optval)) < 0) {
+            GST_INFO_OBJECT(src, "Error get socket TCP_KEEPINTVL value");
+          }
+
+          optval = SOCKET_TCP_KEEPCNT;
+          if(setsockopt(fd, IPPROTO_TCP, 6/*TCP_KEEPCNT*/, (void*)&optval, sizeof(optval)) < 0) {
+           GST_INFO_OBJECT(src, "Error get socket TCP_KEEPINTVL value");
+          }
+
+          //for check
+          if(getsockopt(fd, SOL_SOCKET, SO_KEEPALIVE/**/, (void*)&optval, (socklen_t*)&optlen) < 0) {
+            GST_INFO_OBJECT(src, "Error get socket SO_KEEPALIVE option value");
+          } else {
+            GST_INFO_OBJECT(src, "SO_KEEPALIVE : %d",optval);
+          }
+
+          if(getsockopt(fd, IPPROTO_TCP, 4/*TCP_KEEPIDLE*/, (void*)&optval, (socklen_t*)&optlen) < 0) {
+            GST_INFO_OBJECT(src, "Error get socket TCP_KEEPIDLE option value");
+          } else {
+            GST_INFO_OBJECT(src, "TCP_KEEPIDLE : %d",optval);
+          }
+
+          if(getsockopt(fd, IPPROTO_TCP, 5/*TCP_KEEPINTVL*/, (void*)&optval, (socklen_t*)&optlen) < 0) {
+            GST_INFO_OBJECT(src, "Error get socket TCP_KEEPINTVL option value");
+          } else {
+            GST_INFO_OBJECT(src, "TCP_KEEPINTVL : %d",optval);
+          }
+
+          if(getsockopt(fd, IPPROTO_TCP, 6/*TCP_KEEPCNT */, (void*)&optval, (socklen_t*)&optlen) < 0) {
+            GST_INFO_OBJECT(src, "Error get socket TCP_KEEPCNT option value");
+          } else {
+            GST_INFO_OBJECT(src, "TCP_KEEPCNT : %d",optval);
+          }
+        }
+      }
+    }
     info->connected = TRUE;
   }
   return GST_RTSP_OK;
@@ -2011,6 +2071,8 @@ gst_wfd_base_src_loop (GstWFDBaseSrc * src)
         /* server closed the connection.*/
         GST_ELEMENT_WARNING (src, RESOURCE, READ, (NULL),
             ("The server closed the connection."));
+        gst_element_post_message (GST_ELEMENT_CAST (src), gst_message_new_element (GST_OBJECT_CAST (src), gst_structure_new ("GstWFDSrcSessionTimeout", NULL)));
+
         goto connect_error;
       default:
         goto receive_error;
