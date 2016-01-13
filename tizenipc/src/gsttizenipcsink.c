@@ -669,7 +669,7 @@ static gboolean gst_tizenipc_sink_stop(GstBaseSink *bsink)
 
   while (self->sended_buffer_count > 0) {
     wait_end_time = g_get_monotonic_time () + BUFFER_WAIT_TIMEOUT;
-    if (!g_cond_wait_until(&self->ipc_cond, &self->ipc_lock, wait_end_time)) {
+    if (!g_cond_wait_until(&self->buffer_cond, &self->buffer_lock, wait_end_time)) {
       GST_WARNING_OBJECT(self, "wait timeout - current count %d",
                                self->sended_buffer_count);
       break;
@@ -846,7 +846,6 @@ static GstFlowReturn gst_tizenipc_sink_render(GstBaseSink *bsink, GstBuffer *buf
 
   if (!g_cond_wait_until(&self->ipc_cond, &self->ipc_lock, wait_end_time)) {
     GST_ERROR_OBJECT(self, "response wait timeout[%lld usec]", CLIENT_RESPONSE_TIMEOUT);
-    g_mutex_unlock(&self->ipc_lock);
     goto _SKIP_BUFFER_AFTER_ADD_TO_LIST;
   } else {
     GST_LOG_OBJECT(self, "response received.");
