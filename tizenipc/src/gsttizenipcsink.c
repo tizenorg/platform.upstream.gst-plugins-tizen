@@ -846,7 +846,6 @@ static GstFlowReturn gst_tizenipc_sink_render(GstBaseSink *bsink, GstBuffer *buf
 
   if (!g_cond_wait_until(&self->ipc_cond, &self->ipc_lock, wait_end_time)) {
     GST_ERROR_OBJECT(self, "response wait timeout[%lld usec]", CLIENT_RESPONSE_TIMEOUT);
-    g_mutex_unlock(&self->ipc_lock);
     goto _SKIP_BUFFER_AFTER_ADD_TO_LIST;
   } else {
     GST_LOG_OBJECT(self, "response received.");
