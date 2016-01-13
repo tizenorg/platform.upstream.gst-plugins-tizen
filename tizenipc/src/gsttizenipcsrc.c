@@ -40,7 +40,6 @@
 #define DEFAULT_SHM_PATH    "/tizenipcshm"
 #define DEFAULT_PERMISSIONS (S_IRUSR|S_IWUSR|S_IRGRP)
 #define DEFAULT_BACKLOG     5
-#define CLIENT_RESPONSE_TIMEOUT (G_TIME_SPAN_MILLISECOND * 200)
 #define BUFFER_WAIT_TIMEOUT     (G_TIME_SPAN_MILLISECOND * 3000)
 
 GST_DEBUG_CATEGORY(gst_debug_tizenipc_src);
@@ -166,6 +165,8 @@ _PREPARE_FAILED:
 
 static gboolean _tizenipc_src_stop_to_read(GstTizenipcSrc *self)
 {
+  int send_len = 0;
+  GstTizenipcMessage send_msg = {0,};
   gint64 wait_end_time = 0;
 
   if (self == NULL) {
@@ -194,6 +195,18 @@ static gboolean _tizenipc_src_stop_to_read(GstTizenipcSrc *self)
   g_mutex_unlock(&self->buffer_lock);
 
   if (self->socket_fd >= 0) {
+    /* send message to sink to noti client closing */
+    GST_WARNING_OBJECT(self, "send CLOSE_CLIENT message to sink");
+
+    send_msg.type = TIZEN_IPC_CLOSE_CLIENT;
+    send_len = send(self->socket_fd, &send_msg, sizeof(GstTizenipcMessage), MSG_NOSIGNAL);
+    if (send_len != sizeof(GstTizenipcMessage)) {
+      GST_ERROR_OBJECT(self, "send failed : CLOSE_CLIENT");
+    }
+
+    usleep(30 * 1000);
+    GST_WARNING_OBJECT(self, "30 ms sleep to complete sending msg - done");
+
     shutdown(self->socket_fd, SHUT_RDWR);
     close(self->socket_fd);
     self->socket_fd = -1;
@@ -519,7 +532,7 @@ static void gst_tizenipc_src_buffer_finalize(GstTizenipcSrcBuffer *ipc_buf)
     memcpy(send_msg.tbm_key, ipc_buf->tbm_key, sizeof(int) * MM_VIDEO_BUFFER_PLANE_MAX);
     send_len = send(self->socket_fd, &send_msg, sizeof(GstTizenipcMessage), MSG_NOSIGNAL);
     if (send_len != sizeof(GstTizenipcMessage)) {
-      GST_ERROR_OBJECT(self, "failed to send BUFFER_RELEASE message");
+      GST_ERROR_OBJECT(self, "send failed : BUFFER_RELEASE key[0] %d", send_msg.tbm_key[0]);
     }
   } else {
     GST_ERROR_OBJECT(self, "invalid socket fd %d", self->socket_fd);

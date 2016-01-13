@@ -39,7 +39,7 @@
 #define DEFAULT_SHM_PATH    "/tizenipcshm"
 #define DEFAULT_PERMISSIONS (S_IRUSR|S_IWUSR|S_IRGRP)
 #define DEFAULT_BACKLOG     5
-#define CLIENT_RESPONSE_TIMEOUT (G_TIME_SPAN_MILLISECOND * 200)
+#define CLIENT_RESPONSE_TIMEOUT (G_TIME_SPAN_MILLISECOND * 100)
 #define BUFFER_WAIT_TIMEOUT     (G_TIME_SPAN_MILLISECOND * 3000)
 
 GST_DEBUG_CATEGORY(gst_debug_tizenipc_sink);
@@ -669,7 +669,7 @@ static gboolean gst_tizenipc_sink_stop(GstBaseSink *bsink)
 
   while (self->sended_buffer_count > 0) {
     wait_end_time = g_get_monotonic_time () + BUFFER_WAIT_TIMEOUT;
-    if (!g_cond_wait_until(&self->ipc_cond, &self->ipc_lock, wait_end_time)) {
+    if (!g_cond_wait_until(&self->buffer_cond, &self->buffer_lock, wait_end_time)) {
       GST_WARNING_OBJECT(self, "wait timeout - current count %d",
                                self->sended_buffer_count);
       break;
@@ -776,6 +776,11 @@ static GstFlowReturn gst_tizenipc_sink_render(GstBaseSink *bsink, GstBuffer *buf
     goto _SKIP_BUFFER;
   }
 
+  if (self->client_closing) {
+    GST_WARNING_OBJECT(self, "client is closing... skip buffer");
+    goto _SKIP_BUFFER;
+  }
+
   /* get mm_buf from gst buffer */
   if (gst_buffer_n_memory(buf) <= 1) {
     GST_WARNING_OBJECT(self, "invalid memory number %d", gst_buffer_n_memory(buf));
@@ -846,10 +851,13 @@ static GstFlowReturn gst_tizenipc_sink_render(GstBaseSink *bsink, GstBuffer *buf
 
   if (!g_cond_wait_until(&self->ipc_cond, &self->ipc_lock, wait_end_time)) {
     GST_ERROR_OBJECT(self, "response wait timeout[%lld usec]", CLIENT_RESPONSE_TIMEOUT);
-    g_mutex_unlock(&self->ipc_lock);
     goto _SKIP_BUFFER_AFTER_ADD_TO_LIST;
   } else {
     GST_LOG_OBJECT(self, "response received.");
+    if (self->client_closing) {
+      GST_WARNING_OBJECT(self, "client is closing... skip this buffer");
+      goto _SKIP_BUFFER_AFTER_ADD_TO_LIST;
+    }
   }
 
   g_mutex_unlock(&self->ipc_lock);
@@ -949,12 +957,17 @@ static gpointer _gst_poll_thread_func(gpointer data)
     if (gst_poll_fd_can_read(self->poll, &self->pollfd)) {
       GstTizenipcMessage msg = {0, };
 
+      g_mutex_lock(&self->ipc_lock);
+
       /* connect client */
       self->client_fd = accept(self->socket_fd, NULL, NULL);
       if (self->client_fd < 0) {
         GST_ERROR_OBJECT(self, "can not connect client");
+        g_mutex_unlock(&self->ipc_lock);
         continue;
       }
+
+      self->client_closing = FALSE;
 
       GST_INFO_OBJECT(self, "client accpeted : fd %d", self->client_fd);
 
@@ -965,6 +978,7 @@ static gpointer _gst_poll_thread_func(gpointer data)
         GST_ERROR_OBJECT(self, "failed to send shard memory path 1");
         close(self->client_fd);
         self->client_fd = -1;
+        g_mutex_unlock(&self->ipc_lock);
         continue;
       }
 
@@ -972,6 +986,7 @@ static gpointer _gst_poll_thread_func(gpointer data)
         GST_ERROR_OBJECT(self, "failed to send shard memory path 2");
         close(self->client_fd);
         self->client_fd = -1;
+        g_mutex_unlock(&self->ipc_lock);
         continue;
       }
 
@@ -984,6 +999,8 @@ static gpointer _gst_poll_thread_func(gpointer data)
 
       g_signal_emit(self, signals[SIGNAL_CLIENT_CONNECTED], 0, self->client_pollfd.fd);
       timeout = 0;
+
+      g_mutex_unlock(&self->ipc_lock);
       continue;
     }
 
@@ -1025,6 +1042,13 @@ static gpointer _gst_poll_thread_func(gpointer data)
                                tbm_key[0], tbm_key[1], tbm_key[2], tbm_key[3]);
 
           _remove_buffer_from_list(self, tbm_key);
+          break;
+        case TIZEN_IPC_CLOSE_CLIENT:
+          GST_LOG_OBJECT(self, "CLOSE_CLIENT message received");
+          g_mutex_lock(&self->ipc_lock);
+          self->client_closing = TRUE;
+          g_cond_signal(&self->ipc_cond);
+          g_mutex_unlock(&self->ipc_lock);
           break;
         default:
           GST_WARNING_OBJECT(self, "unknown type of message : %d", msg.type);

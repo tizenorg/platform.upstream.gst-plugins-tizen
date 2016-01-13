@@ -56,6 +56,7 @@ struct _GstTizenipcSink {
   GstPollFD pollfd;
   int client_fd;
   GstPollFD client_pollfd;
+  gboolean client_closing;
   gchar *socket_path_result;
   gchar *shm_path;
   gchar *shm_mapped_area;
@@ -88,7 +89,8 @@ enum {
   TIZEN_IPC_SHM_PATH = 0,
   TIZEN_IPC_BUFFER_NEW,
   TIZEN_IPC_BUFFER_RECEIVED,
-  TIZEN_IPC_BUFFER_RELEASE
+  TIZEN_IPC_BUFFER_RELEASE,
+  TIZEN_IPC_CLOSE_CLIENT
 };
 
 struct _GstTizenipcMessage {
