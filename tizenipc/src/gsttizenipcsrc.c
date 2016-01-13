@@ -519,7 +519,7 @@ static void gst_tizenipc_src_buffer_finalize(GstTizenipcSrcBuffer *ipc_buf)
     memcpy(send_msg.tbm_key, ipc_buf->tbm_key, sizeof(int) * MM_VIDEO_BUFFER_PLANE_MAX);
     send_len = send(self->socket_fd, &send_msg, sizeof(GstTizenipcMessage), MSG_NOSIGNAL);
     if (send_len != sizeof(GstTizenipcMessage)) {
-      GST_ERROR_OBJECT(self, "failed to send BUFFER_RELEASE message");
+      GST_ERROR_OBJECT(self, "send failed : BUFFER_RELEASE key[0] %d", send_msg.tbm_key);
     }
   } else {
     GST_ERROR_OBJECT(self, "invalid socket fd %d", self->socket_fd);
