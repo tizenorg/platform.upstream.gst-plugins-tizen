@@ -39,8 +39,9 @@
 #define DEFAULT_SHM_PATH    "/tizenipcshm"
 #define DEFAULT_PERMISSIONS (S_IRUSR|S_IWUSR|S_IRGRP)
 #define DEFAULT_BACKLOG     5
-#define CLIENT_RESPONSE_TIMEOUT (G_TIME_SPAN_MILLISECOND * 100)
-#define BUFFER_WAIT_TIMEOUT     (G_TIME_SPAN_MILLISECOND * 3000)
+#define CLIENT_RESPONSE_TIMEOUT_NORMAL      (G_TIME_SPAN_SECOND)
+#define CLIENT_RESPONSE_TIMEOUT_ZERO_COPY   (G_TIME_SPAN_MILLISECOND * 100)
+#define BUFFER_WAIT_TIMEOUT                 (G_TIME_SPAN_MILLISECOND * 3000)
 
 GST_DEBUG_CATEGORY(gst_debug_tizenipc_sink);
 
@@ -86,6 +87,8 @@ static GstFlowReturn gst_tizenipc_sink_render(GstBaseSink *bsink, GstBuffer *buf
 static gboolean gst_tizenipc_sink_event(GstBaseSink *bsink, GstEvent *event);
 static gboolean gst_tizenipc_sink_unlock(GstBaseSink *bsink);
 static gboolean gst_tizenipc_sink_unlock_stop(GstBaseSink *bsink);
+static gboolean gst_tizenipc_sink_set_caps(GstBaseSink *bsink, GstCaps *caps);
+static GstCaps *gst_tizenipc_sink_get_caps(GstBaseSink *bsink, GstCaps *filter);
 
 static gpointer _gst_poll_thread_func(gpointer data);
 
@@ -420,6 +423,8 @@ static void gst_tizenipc_sink_class_init(GstTizenipcSinkClass *klass)
   gobject_class->set_property = gst_tizenipc_sink_set_property;
   gobject_class->get_property = gst_tizenipc_sink_get_property;
 
+  gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR(gst_tizenipc_sink_get_caps);
+  gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR(gst_tizenipc_sink_set_caps);
   gstbasesink_class->start = GST_DEBUG_FUNCPTR(gst_tizenipc_sink_start);
   gstbasesink_class->stop = GST_DEBUG_FUNCPTR(gst_tizenipc_sink_stop);
   gstbasesink_class->render = GST_DEBUG_FUNCPTR(gst_tizenipc_sink_render);
@@ -621,11 +626,7 @@ static gboolean gst_tizenipc_sink_start(GstBaseSink *bsink)
     return FALSE;
   }
 
-  /* create socket and shared memory for sending buffer */
-  if (!_prepare_tizenipc_sink(self, sizeof(MMVideoBuffer) + sizeof(int)*MM_VIDEO_BUFFER_PLANE_MAX)) {
-    GST_ERROR_OBJECT(self, "prepare failed");
-    return FALSE;
-  }
+  GST_INFO_OBJECT(self, "start");
 
   return TRUE;
 }
@@ -747,7 +748,7 @@ static GstFlowReturn gst_tizenipc_sink_render(GstBaseSink *bsink, GstBuffer *buf
   GstTizenipcSink *self = NULL;
   GstTizenipcMessage msg = {0, };
   MMVideoBuffer *mm_buf = NULL;
-  GstMemory *mm_buf_memory = NULL;
+  GstMemory *memory = NULL;
   GstMapInfo map_info = GST_MAP_INFO_INIT;
   gint64 wait_end_time = 0;
   int tbm_key[MM_VIDEO_BUFFER_PLANE_MAX] = {0, };
@@ -781,62 +782,87 @@ static GstFlowReturn gst_tizenipc_sink_render(GstBaseSink *bsink, GstBuffer *buf
     goto _SKIP_BUFFER;
   }
 
-  /* get mm_buf from gst buffer */
-  if (gst_buffer_n_memory(buf) <= 1) {
-    GST_WARNING_OBJECT(self, "invalid memory number %d", gst_buffer_n_memory(buf));
-    goto _SKIP_BUFFER;
-  }
-
-  mm_buf_memory = gst_buffer_peek_memory(buf, 1);
-  if (mm_buf_memory == NULL) {
-    GST_WARNING_OBJECT(self, "failed to peek memory 1 for %p", buf);
-    goto _SKIP_BUFFER;
-  }
-
-  if (gst_memory_map(mm_buf_memory, &map_info, GST_MAP_READ) == FALSE) {
-    GST_WARNING_OBJECT(self, "failed to map memory %p", mm_buf_memory);
-    goto _SKIP_BUFFER;
-  }
-
-  mm_buf = (MMVideoBuffer *)map_info.data;
-
-  gst_memory_unmap(mm_buf_memory, &map_info);
-
-  if (mm_buf == NULL) {
-    GST_WARNING_OBJECT(self, "NULL mm_buf");
-    goto _SKIP_BUFFER;
-  }
-
-  GST_LOG_OBJECT(self, "MMVideoBuffer info - %p, num handle %d",
-                       mm_buf, mm_buf->handle_num);
-
-  /* export bo to pass buffer to client process */
-  for (i = 0 ; i < mm_buf->handle_num ; i++) {
-    if (mm_buf->handle.bo[i]) {
-      tbm_key[i] = tbm_bo_export(mm_buf->handle.bo[i]);
-      GST_LOG_OBJECT(self, "export tbm key[index:%d] %d", i, tbm_key[i]);
-      if (tbm_key[i] <= 0) {
-        GST_ERROR_OBJECT(self, "failed to export bo[%d] %p", i, mm_buf->handle.bo[i]);
-        goto _SKIP_BUFFER;
-      }
-    } else {
-      break;
+  if (self->is_normal_format) {
+    memory = gst_buffer_peek_memory(buf, 0);
+    if (memory == NULL) {
+      GST_WARNING_OBJECT(self, "failed to peek memory 0 for %p", buf);
+      goto _SKIP_BUFFER;
     }
+
+    if (gst_memory_map(memory, &map_info, GST_MAP_READ) == FALSE) {
+      GST_WARNING_OBJECT(self, "failed to map memory %p", memory);
+      goto _SKIP_BUFFER;
+    }
+
+    GST_INFO_OBJECT(self, "map data %p, map size %d", map_info.data, map_info.size);
+
+    memcpy(self->shm_mapped_area, map_info.data, map_info.size);
+
+    GST_INFO_OBJECT(self, "copy done");
+
+    gst_memory_unmap(memory, &map_info);
+
+    /* set command type and size */
+    msg.id = TIZEN_IPC_BUFFER_NEW;
+    msg.size = map_info.size;
+  } else {
+    /* get mm_buf from gst buffer */
+    if (gst_buffer_n_memory(buf) <= 1) {
+      GST_WARNING_OBJECT(self, "invalid memory number %d", gst_buffer_n_memory(buf));
+      goto _SKIP_BUFFER;
+    }
+
+    memory = gst_buffer_peek_memory(buf, 1);
+    if (memory == NULL) {
+      GST_WARNING_OBJECT(self, "failed to peek memory 1 for %p", buf);
+      goto _SKIP_BUFFER;
+    }
+
+    if (gst_memory_map(memory, &map_info, GST_MAP_READ) == FALSE) {
+      GST_WARNING_OBJECT(self, "failed to map memory %p", memory);
+      goto _SKIP_BUFFER;
+    }
+
+    mm_buf = (MMVideoBuffer *)map_info.data;
+
+    gst_memory_unmap(memory, &map_info);
+
+    if (mm_buf == NULL) {
+      GST_WARNING_OBJECT(self, "NULL mm_buf");
+      goto _SKIP_BUFFER;
+    }
+
+    GST_LOG_OBJECT(self, "MMVideoBuffer info - %p, num handle %d",
+      mm_buf, mm_buf->handle_num);
+
+    /* export bo to pass buffer to client process */
+    for (i = 0 ; i < mm_buf->handle_num ; i++) {
+      if (mm_buf->handle.bo[i]) {
+        tbm_key[i] = tbm_bo_export(mm_buf->handle.bo[i]);
+        GST_LOG_OBJECT(self, "export tbm key[index:%d] %d", i, tbm_key[i]);
+        if (tbm_key[i] <= 0) {
+          GST_ERROR_OBJECT(self, "failed to export bo[%d] %p", i, mm_buf->handle.bo[i]);
+          goto _SKIP_BUFFER;
+        }
+      } else {
+        break;
+      }
+    }
+
+    /* keep and send buffer */
+    if (_add_buffer_to_list(self, buf, tbm_key) == FALSE) {
+      GST_ERROR_OBJECT(self, "failed to add to list for buffer %p and key[0] %d", buf, tbm_key[0]);
+      goto _SKIP_BUFFER;
+    }
+
+    /* set command type and size */
+    msg.id = TIZEN_IPC_BUFFER_NEW;
+    msg.size = sizeof(MMVideoBuffer) + sizeof(tbm_key);
+
+    /* copy zero copy info to shared memory */
+    memcpy(self->shm_mapped_area, mm_buf, sizeof(MMVideoBuffer));
+    memcpy(self->shm_mapped_area + sizeof(MMVideoBuffer), tbm_key, sizeof(tbm_key));
   }
-
-  /* keep and send buffer */
-  if (_add_buffer_to_list(self, buf, tbm_key) == FALSE) {
-    GST_ERROR_OBJECT(self, "failed to add to list for buffer %p and key[0] %d", buf, tbm_key[0]);
-    goto _SKIP_BUFFER;
-  }
-
-  /* set command type and size */
-  msg.type = TIZEN_IPC_BUFFER_NEW;
-  msg.size = sizeof(MMVideoBuffer) + sizeof(tbm_key);
-
-  /* copy zero copy info to shared memory */
-  memcpy(self->shm_mapped_area, mm_buf, sizeof(MMVideoBuffer));
-  memcpy(self->shm_mapped_area + sizeof(MMVideoBuffer), tbm_key, sizeof(tbm_key));
 
   /* send data */
   if (send(self->client_fd, &msg, sizeof(GstTizenipcMessage), MSG_NOSIGNAL) != sizeof(GstTizenipcMessage)) {
@@ -847,10 +873,12 @@ static GstFlowReturn gst_tizenipc_sink_render(GstBaseSink *bsink, GstBuffer *buf
   /* wait for client's response */
   GST_LOG_OBJECT(self, "Wait for client's response");
 
-  wait_end_time = g_get_monotonic_time () + CLIENT_RESPONSE_TIMEOUT;
+  wait_end_time = g_get_monotonic_time () + \
+    (self->is_normal_format ? CLIENT_RESPONSE_TIMEOUT_NORMAL : CLIENT_RESPONSE_TIMEOUT_ZERO_COPY);
 
   if (!g_cond_wait_until(&self->ipc_cond, &self->ipc_lock, wait_end_time)) {
-    GST_ERROR_OBJECT(self, "response wait timeout[%lld usec]", CLIENT_RESPONSE_TIMEOUT);
+    GST_ERROR_OBJECT(self, "response wait timeout[%lld usec]",
+      self->is_normal_format ? CLIENT_RESPONSE_TIMEOUT_NORMAL : CLIENT_RESPONSE_TIMEOUT_ZERO_COPY);
     goto _SKIP_BUFFER_AFTER_ADD_TO_LIST;
   } else {
     GST_LOG_OBJECT(self, "response received.");
@@ -865,7 +893,8 @@ static GstFlowReturn gst_tizenipc_sink_render(GstBaseSink *bsink, GstBuffer *buf
   return GST_FLOW_OK;
 
 _SKIP_BUFFER_AFTER_ADD_TO_LIST:
-  _remove_buffer_from_list(self, tbm_key);
+  if (!self->is_normal_format)
+    _remove_buffer_from_list(self, tbm_key);
 
 _SKIP_BUFFER:
   g_mutex_unlock(&self->ipc_lock);
@@ -910,6 +939,99 @@ static gboolean gst_tizenipc_sink_unlock(GstBaseSink *bsink)
 static gboolean gst_tizenipc_sink_unlock_stop(GstBaseSink *bsink)
 {
   return TRUE;
+}
+
+
+static gboolean gst_tizenipc_sink_set_caps(GstBaseSink *bsink, GstCaps *caps)
+{
+  GstTizenipcSink *self = NULL;
+  GstStructure *structure = NULL;
+
+  if (bsink == NULL) {
+    GST_ERROR("NULL object");
+    return FALSE;
+  }
+
+  self = GST_TIZENIPC_SINK(bsink);
+  if (self == NULL) {
+    GST_ERROR_OBJECT(bsink, "failed to cast to GST_TIZENIPC_SINK with %p", bsink);
+    return FALSE;
+  }
+
+  GST_INFO_OBJECT(self, "start - caps [%"GST_PTR_FORMAT"]", caps);
+
+  self->is_normal_format = TRUE;
+
+  structure = gst_caps_get_structure(caps, 0);
+  if (structure == NULL) {
+    GST_ERROR_OBJECT(self, "failed to get structure from caps [%"GST_PTR_FORMAT"]", caps);
+    return FALSE;
+  }
+
+  if (!gst_structure_has_name(structure, "video/x-raw")) {
+    GST_ERROR_OBJECT(self, "not supported caps [%"GST_PTR_FORMAT"]", caps);
+    return FALSE;
+  }
+
+  self->format_string = gst_structure_get_string(structure, "format");
+  if (self->format_string == NULL) {
+    GST_ERROR_OBJECT(self, "failed to get format from caps [%"GST_PTR_FORMAT"]", caps);
+    return FALSE;
+  }
+
+  if (!gst_structure_get_int(structure, "width", &self->width) ||
+    !gst_structure_get_int(structure, "height", &self->height)) {
+    GST_ERROR_OBJECT(self, "failed to get width, height from caps [%"GST_PTR_FORMAT"]", caps);
+    return FALSE;
+  }
+
+  if (!strcmp(self->format_string, "SN12") || !strcmp(self->format_string, "SN21") ||
+    !strcmp(self->format_string, "SYVY") || !strcmp(self->format_string, "SUYV") ||
+    !strcmp(self->format_string, "S420")) {
+    self->shm_size = sizeof(MMVideoBuffer) + (sizeof(int) * MM_VIDEO_BUFFER_PLANE_MAX);
+    self->is_normal_format = FALSE;
+  } else if (!strcmp(self->format_string, "NV12") || !strcmp(self->format_string, "NV21") ||
+    !strcmp(self->format_string, "I420") || !strcmp(self->format_string, "YV12")) {
+    self->shm_size = (self->width * self->height * 3) >> 1;
+  } else if (!strcmp(self->format_string, "YUYV") || !strcmp(self->format_string, "YUY2") ||
+    !strcmp(self->format_string, "UYVY")) {
+    self->shm_size = (self->width * self->height) << 1;
+  } else {
+    GST_ERROR_OBJECT(self, "unsupported format [%s]", self->format_string);
+    return FALSE;
+  }
+
+  GST_INFO_OBJECT(self, "format %s, size %dx%d, shm size %d",
+    self->format_string, self->width, self->height, self->shm_size);
+
+  /* create socket and shared memory for sending buffer */
+  if (!_prepare_tizenipc_sink(self, self->shm_size)) {
+    GST_ERROR_OBJECT(self, "prepare failed");
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+
+static GstCaps *gst_tizenipc_sink_get_caps(GstBaseSink *bsink, GstCaps *filter)
+{
+  GstTizenipcSink *self = NULL;
+
+  if (bsink == NULL) {
+    GST_ERROR("NULL object");
+    return NULL;
+  }
+
+  self = GST_TIZENIPC_SINK(bsink);
+  if (self == NULL) {
+    GST_ERROR_OBJECT(bsink, "failed to cast to GST_TIZENIPC_SINK with %p", bsink);
+    return NULL;
+  }
+
+  GST_INFO_OBJECT(self, "start");
+
+  return NULL;
 }
 
 
@@ -971,8 +1093,19 @@ static gpointer _gst_poll_thread_func(gpointer data)
 
       GST_INFO_OBJECT(self, "client accpeted : fd %d", self->client_fd);
 
+      /* send shard memory size */
+      msg.id = TIZEN_IPC_SHM_SIZE;
+      msg.size = self->shm_mapped_size;
+      if (send(self->client_fd, &msg, sizeof(GstTizenipcMessage), MSG_NOSIGNAL) != sizeof(GstTizenipcMessage)) {
+        GST_ERROR_OBJECT(self, "failed to send shard memory size");
+        close(self->client_fd);
+        self->client_fd = -1;
+        g_mutex_unlock(&self->ipc_lock);
+        continue;
+      }
+
       /* send shard memory path */
-      msg.type = TIZEN_IPC_SHM_PATH;
+      msg.id = TIZEN_IPC_SHM_PATH;
       msg.size = strlen(self->shm_path) + 1;
       if (send(self->client_fd, &msg, sizeof(GstTizenipcMessage), MSG_NOSIGNAL) != sizeof(GstTizenipcMessage)) {
         GST_ERROR_OBJECT(self, "failed to send shard memory path 1");
@@ -991,6 +1124,19 @@ static gpointer _gst_poll_thread_func(gpointer data)
       }
 
       GST_INFO_OBJECT(self, "send shm path done - %s", self->shm_path);
+
+      /* send buffer type */
+      msg.id = TIZEN_IPC_BUFFER_TYPE;
+      msg.type = self->is_normal_format ? BUFFER_TYPE_NORMAL : BUFFER_TYPE_ZERO_COPY;
+      if (send(self->client_fd, &msg, sizeof(GstTizenipcMessage), MSG_NOSIGNAL) != sizeof(GstTizenipcMessage)) {
+        GST_ERROR_OBJECT(self, "failed to send buffer type");
+        close(self->client_fd);
+        self->client_fd = -1;
+        g_mutex_unlock(&self->ipc_lock);
+        continue;
+      }
+
+      GST_INFO_OBJECT(self, "send buffer type done - %d", msg.type);
 
       gst_poll_fd_init(&self->client_pollfd);
       self->client_pollfd.fd = self->client_fd;
@@ -1025,7 +1171,7 @@ static gpointer _gst_poll_thread_func(gpointer data)
           goto close_client;
         }
 
-        switch (msg.type) {
+        switch (msg.id) {
         case TIZEN_IPC_BUFFER_NEW:
           GST_WARNING_OBJECT(self, "BUFFER_NEW???");
           break;
@@ -1051,7 +1197,7 @@ static gpointer _gst_poll_thread_func(gpointer data)
           g_mutex_unlock(&self->ipc_lock);
           break;
         default:
-          GST_WARNING_OBJECT(self, "unknown type of message : %d", msg.type);
+          GST_WARNING_OBJECT(self, "unknown message : id %d", msg.id);
           break;
         }
       }

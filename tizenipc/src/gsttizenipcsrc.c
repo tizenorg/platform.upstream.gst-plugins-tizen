@@ -198,7 +198,7 @@ static gboolean _tizenipc_src_stop_to_read(GstTizenipcSrc *self)
     /* send message to sink to noti client closing */
     GST_WARNING_OBJECT(self, "send CLOSE_CLIENT message to sink");
 
-    send_msg.type = TIZEN_IPC_CLOSE_CLIENT;
+    send_msg.id = TIZEN_IPC_CLOSE_CLIENT;
     send_len = send(self->socket_fd, &send_msg, sizeof(GstTizenipcMessage), MSG_NOSIGNAL);
     if (send_len != sizeof(GstTizenipcMessage)) {
       GST_ERROR_OBJECT(self, "send failed : CLOSE_CLIENT");
@@ -528,7 +528,7 @@ static void gst_tizenipc_src_buffer_finalize(GstTizenipcSrcBuffer *ipc_buf)
 
   /* send message to sink for current tbm key */
   if (self->socket_fd > -1) {
-    send_msg.type = TIZEN_IPC_BUFFER_RELEASE;
+    send_msg.id = TIZEN_IPC_BUFFER_RELEASE;
     memcpy(send_msg.tbm_key, ipc_buf->tbm_key, sizeof(int) * MM_VIDEO_BUFFER_PLANE_MAX);
     send_len = send(self->socket_fd, &send_msg, sizeof(GstTizenipcMessage), MSG_NOSIGNAL);
     if (send_len != sizeof(GstTizenipcMessage)) {
@@ -584,6 +584,7 @@ static GstFlowReturn gst_tizenipc_src_create(GstPushSrc *psrc, GstBuffer **outbu
   MMVideoBuffer *mm_buf = NULL;
   GstBuffer *gst_buf = NULL;
   GstMemory *gst_memory = NULL;
+  void *normal_buffer_data = NULL;
   int i = 0;
   int recv_len = 0;
   int send_len = 0;
@@ -642,49 +643,58 @@ again:
     }
 
     /* handle message */
-    if (recv_msg.type == TIZEN_IPC_BUFFER_NEW) {
+    if (recv_msg.id == TIZEN_IPC_BUFFER_NEW) {
       /* get new buffer from sink */
       if (self->shm_mapped_area == MAP_FAILED) {
         GST_ERROR_OBJECT(self, "shared memory is not mapped");
         return GST_FLOW_ERROR;
       }
 
-      mm_buf = (MMVideoBuffer *)malloc(sizeof(MMVideoBuffer));
-      if (mm_buf) {
-        memcpy(mm_buf, self->shm_mapped_area, sizeof(MMVideoBuffer));
-        memcpy(send_msg.tbm_key, self->shm_mapped_area + sizeof(MMVideoBuffer), sizeof(int) * MM_VIDEO_BUFFER_PLANE_MAX);
+      if (!self->is_normal_format) {
+        mm_buf = (MMVideoBuffer *)malloc(sizeof(MMVideoBuffer));
+        if (mm_buf) {
+          memcpy(mm_buf, self->shm_mapped_area, sizeof(MMVideoBuffer));
+          memcpy(send_msg.tbm_key, self->shm_mapped_area + sizeof(MMVideoBuffer), sizeof(int) * MM_VIDEO_BUFFER_PLANE_MAX);
 
-        for (i = 0 ; i < MM_VIDEO_BUFFER_PLANE_MAX ; i++) {
-          if (send_msg.tbm_key[i] > 0) {
-            tbm_bo_handle bo_handle = {0, };
+          for (i = 0 ; i < MM_VIDEO_BUFFER_PLANE_MAX ; i++) {
+            if (send_msg.tbm_key[i] > 0) {
+              tbm_bo_handle bo_handle = {0, };
 
-            GST_LOG_OBJECT(self, "received tbm key[%d] %d", i, send_msg.tbm_key[i]);
+              GST_LOG_OBJECT(self, "received tbm key[%d] %d", i, send_msg.tbm_key[i]);
 
-            /* import bo from tbm key */
-            mm_buf->handle.bo[i] = tbm_bo_import(self->bufmgr, send_msg.tbm_key[i]);
-            if (mm_buf->handle.bo[i] == NULL) {
-              GST_ERROR_OBJECT(self, "failed to import bo for tbm key %d", send_msg.tbm_key[i]);
+              /* import bo from tbm key */
+              mm_buf->handle.bo[i] = tbm_bo_import(self->bufmgr, send_msg.tbm_key[i]);
+              if (mm_buf->handle.bo[i] == NULL) {
+                GST_ERROR_OBJECT(self, "failed to import bo for tbm key %d", send_msg.tbm_key[i]);
+                break;
+              }
+
+              /* get user address */
+              bo_handle = tbm_bo_get_handle(mm_buf->handle.bo[i], TBM_DEVICE_CPU);
+              if (bo_handle.ptr == NULL) {
+                GST_ERROR_OBJECT(self, "failed to get user address for bo %p, key %d",
+                  mm_buf->handle.bo[i], send_msg.tbm_key[i]);
+                break;
+              }
+              mm_buf->data[i] = bo_handle.ptr;
+            } else {
               break;
             }
-
-            /* get user address */
-            bo_handle = tbm_bo_get_handle(mm_buf->handle.bo[i], TBM_DEVICE_CPU);
-            if (bo_handle.ptr == NULL) {
-              GST_ERROR_OBJECT(self, "failed to get user address for bo %p, key %d",
-                                     mm_buf->handle.bo[i], send_msg.tbm_key[i]);
-              break;
-            }
-            mm_buf->data[i] = bo_handle.ptr;
-          } else {
-            break;
           }
+        } else {
+          GST_ERROR_OBJECT(self, "failed to alloc MMVideoBuffer");
         }
       } else {
-        GST_ERROR_OBJECT(self, "failed to alloc MMVideoBuffer");
+        normal_buffer_data = (void *)malloc(recv_msg.size);
+        if (normal_buffer_data) {
+          memcpy(normal_buffer_data, self->shm_mapped_area, recv_msg.size);
+        } else {
+          GST_ERROR_OBJECT(self, "failed to alloc new buffer data - size %d", recv_msg.size);
+        }
       }
 
       /* send received message */
-      send_msg.type = TIZEN_IPC_BUFFER_RECEIVED;
+      send_msg.id = TIZEN_IPC_BUFFER_RECEIVED;
 
       GST_OBJECT_LOCK(self);
 
@@ -695,9 +705,8 @@ again:
       if (send_len != sizeof(GstTizenipcMessage)) {
         GST_ERROR_OBJECT(self, "failed to send RECEIVED message");
       }
-    } else if (recv_msg.type == TIZEN_IPC_SHM_PATH) {
+    } else if (recv_msg.id == TIZEN_IPC_SHM_PATH) {
       gchar shm_path[32] = {'\0',};
-      int shm_size = sizeof(MMVideoBuffer) + (sizeof(int) * MM_VIDEO_BUFFER_PLANE_MAX);
 
       /* get shm path */
       recv_len = recv(self->socket_fd, shm_path, recv_msg.size, 0);
@@ -721,17 +730,17 @@ again:
       }
 
       /* open shared memory */
-      self->shm_fd = shm_open(self->shm_path, O_RDONLY, shm_size);
+      self->shm_fd = shm_open(self->shm_path, O_RDONLY, self->shm_size);
       if (self->shm_fd < 0) {
         GST_ERROR_OBJECT(self, "failed to open shared memory for shm path [%s], size %d",
-                               self->shm_path, shm_size);
+                               self->shm_path, self->shm_size);
         return GST_FLOW_ERROR;
       }
 
       GST_INFO_OBJECT(self, "opened shm fd %d", self->shm_fd);
 
       self->shm_mapped_area = mmap(NULL,
-                                   shm_size,
+                                   self->shm_size,
                                    PROT_READ,
                                    MAP_SHARED,
                                    self->shm_fd,
@@ -743,19 +752,27 @@ again:
         return GST_FLOW_ERROR;
       }
 
-      self->shm_mapped_size = shm_size;
+      self->shm_mapped_size = self->shm_size;
 
       GST_INFO_OBJECT(self, "mapped shared memory address %p, size %d",
-                            self->shm_mapped_area, shm_size);
+                            self->shm_mapped_area, self->shm_size);
+      goto again;
+    } else if (recv_msg.id == TIZEN_IPC_SHM_SIZE) {
+      self->shm_size = recv_msg.size;
+      GST_INFO_OBJECT(self, "shared memory size %d", self->shm_size);
+      goto again;
+    } else if (recv_msg.id == TIZEN_IPC_BUFFER_TYPE) {
+      self->is_normal_format = (recv_msg.type == BUFFER_TYPE_NORMAL) ? TRUE : FALSE;
+      GST_INFO_OBJECT(self, "is normal format? %d", self->is_normal_format);
       goto again;
     } else {
-      GST_WARNING_OBJECT(self, "unknown message type %d", recv_msg.type);
+      GST_WARNING_OBJECT(self, "unknown message : id %d", recv_msg.id);
       goto again;
     }
   }
 
-  if (mm_buf == NULL) {
-    GST_ERROR_OBJECT(self, "NULL mm_buf");
+  if (mm_buf == NULL && normal_buffer_data == NULL) {
+    GST_ERROR_OBJECT(self, "All buffers are NULL");
     return GST_FLOW_ERROR;
   }
 
@@ -767,13 +784,15 @@ again:
   }
 
   /* default memory */
-  gst_memory = gst_memory_new_wrapped(0,
-                                      mm_buf->data[0],
-                                      mm_buf->size[0],
-                                      0,
-                                      mm_buf->size[0],
-                                      NULL,
-                                      NULL);
+  if (mm_buf) {
+    gst_memory = gst_memory_new_wrapped(0,
+      mm_buf->data[0], mm_buf->size[0], 0,
+      mm_buf->size[0], NULL, NULL);
+  } else {
+    gst_memory = gst_memory_new_wrapped(0,
+      normal_buffer_data, recv_msg.size, 0,
+      recv_msg.size, normal_buffer_data, free);
+  }
   if (gst_memory == NULL) {
     GST_ERROR_OBJECT(self, "failed to create default gst memory");
     goto _CREATE_FAILED;
@@ -782,53 +801,50 @@ again:
   gst_buffer_append_memory(gst_buf, gst_memory);
   gst_memory = NULL;
 
-  /* mm_buf memory */
-  gst_memory = gst_memory_new_wrapped(0,
-                                      mm_buf,
-                                      sizeof(MMVideoBuffer),
-                                      0,
-                                      sizeof(MMVideoBuffer),
-                                      mm_buf,
-                                      NULL);
-  if (gst_memory == NULL) {
-    GST_ERROR_OBJECT(self, "failed to create gst memory for mm_buf");
-    goto _CREATE_FAILED;
+  if (mm_buf) {
+    /* mm_buf memory */
+    gst_memory = gst_memory_new_wrapped(0,
+      mm_buf, sizeof(MMVideoBuffer), 0,
+      sizeof(MMVideoBuffer), mm_buf, NULL);
+    if (gst_memory == NULL) {
+      GST_ERROR_OBJECT(self, "failed to create gst memory for mm_buf");
+      goto _CREATE_FAILED;
+    }
+
+    gst_buffer_append_memory(gst_buf, gst_memory);
+    gst_memory = NULL;
+
+    /* ipc_buf memory */
+    ipc_buf = (GstTizenipcSrcBuffer *)malloc(sizeof(GstTizenipcSrcBuffer));
+    if (ipc_buf == NULL) {
+      GST_ERROR_OBJECT(self, "failed to create GstTizenipcsrcBuffer");
+      goto _CREATE_FAILED;
+    }
+
+    ipc_buf->self = gst_object_ref(self);
+    ipc_buf->gst_buf = gst_buf;
+    ipc_buf->mm_buf = mm_buf;
+    memcpy(ipc_buf->tbm_key, send_msg.tbm_key, sizeof(int) * MM_VIDEO_BUFFER_PLANE_MAX);
+
+    gst_memory = gst_memory_new_wrapped(0,
+      ipc_buf, sizeof(GstTizenipcSrcBuffer), 0,
+      sizeof(GstTizenipcSrcBuffer), ipc_buf,
+      (GDestroyNotify)gst_tizenipc_src_buffer_finalize);
+    if (gst_memory == NULL) {
+      GST_ERROR_OBJECT(self, "failed to create gst memory for ipc_buf");
+      goto _CREATE_FAILED;
+    }
+
+    gst_buffer_append_memory(gst_buf, gst_memory);
+    gst_memory = NULL;
+
+    g_mutex_lock(&self->buffer_lock);
+    self->live_buffer_count++;
+    GST_DEBUG_OBJECT(self, "gst buffer %p, live count %d", gst_buf, self->live_buffer_count);
+    g_mutex_unlock(&self->buffer_lock);
+  } else {
+    GST_DEBUG_OBJECT(self, "normal buffer create done - size %d", recv_msg.size);
   }
-
-  gst_buffer_append_memory(gst_buf, gst_memory);
-  gst_memory = NULL;
-
-  /* ipc_buf memory */
-  ipc_buf = (GstTizenipcSrcBuffer *)malloc(sizeof(GstTizenipcSrcBuffer));
-  if (ipc_buf == NULL) {
-    GST_ERROR_OBJECT(self, "failed to create GstTizenipcsrcBuffer");
-    goto _CREATE_FAILED;
-  }
-
-  ipc_buf->self = gst_object_ref(self);
-  ipc_buf->gst_buf = gst_buf;
-  ipc_buf->mm_buf = mm_buf;
-  memcpy(ipc_buf->tbm_key, send_msg.tbm_key, sizeof(int) * MM_VIDEO_BUFFER_PLANE_MAX);
-
-  gst_memory = gst_memory_new_wrapped(0,
-                                      ipc_buf,
-                                      sizeof(GstTizenipcSrcBuffer),
-                                      0,
-                                      sizeof(GstTizenipcSrcBuffer),
-                                      ipc_buf,
-                                      (GDestroyNotify)gst_tizenipc_src_buffer_finalize);
-  if (gst_memory == NULL) {
-    GST_ERROR_OBJECT(self, "failed to create gst memory for ipc_buf");
-    goto _CREATE_FAILED;
-  }
-
-  gst_buffer_append_memory(gst_buf, gst_memory);
-  gst_memory = NULL;
-
-  g_mutex_lock(&self->buffer_lock);
-  self->live_buffer_count++;
-  GST_DEBUG_OBJECT(self, "gst buffer %p, live count %d", gst_buf, self->live_buffer_count);
-  g_mutex_unlock(&self->buffer_lock);
 
   *outbuf = gst_buf;
 
@@ -853,6 +869,11 @@ _CREATE_FAILED:
   if (gst_buf) {
     gst_buffer_unref(gst_buf);
     gst_buf = NULL;
+  }
+
+  if (normal_buffer_data) {
+    free(normal_buffer_data);
+    normal_buffer_data = NULL;
   }
 
   return GST_FLOW_ERROR;
