@@ -46,6 +46,11 @@ typedef struct _GstTizenipcMessage GstTizenipcMessage;
 struct _GstTizenipcSink {
   GstBaseSink parent;
 
+  const gchar *format_string;
+  gint width;
+  gint height;
+  gboolean is_normal_format;
+
   /* ipc */
   int socket_fd;
   int shm_fd;
@@ -61,6 +66,7 @@ struct _GstTizenipcSink {
   gchar *shm_path;
   gchar *shm_mapped_area;
   gint shm_mapped_size;
+  gint shm_size;
   GMutex ipc_lock;
   GCond ipc_cond;
 
@@ -85,17 +91,25 @@ struct _GstTizenipcBuffer {
 };
 
 
-enum {
+typedef enum {
   TIZEN_IPC_SHM_PATH = 0,
+  TIZEN_IPC_SHM_SIZE,
+  TIZEN_IPC_BUFFER_TYPE,
   TIZEN_IPC_BUFFER_NEW,
   TIZEN_IPC_BUFFER_RECEIVED,
   TIZEN_IPC_BUFFER_RELEASE,
   TIZEN_IPC_CLOSE_CLIENT
-};
+} TizenIPCID;
+
+typedef enum {
+  BUFFER_TYPE_NORMAL = 0,
+  BUFFER_TYPE_ZERO_COPY
+} BufferType;
 
 struct _GstTizenipcMessage {
-  int type;
+  TizenIPCID id;
   union {
+    BufferType type;
     int size;
     int tbm_key[MM_VIDEO_BUFFER_PLANE_MAX];
   };
