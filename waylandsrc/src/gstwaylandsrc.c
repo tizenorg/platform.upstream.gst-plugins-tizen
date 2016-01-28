@@ -750,10 +750,8 @@ gst_wayland_src_capture_thread (GstWaylandSrc * src)
   pfd.events = POLLIN;
 
   /* thread loop */
-  timeout = (src->format == FOURCC_NV12) ? -1 : 5;
+  timeout = 5;
   while (!src->thread_return) {
-    /* Workaround fix for blocking issue when getting ARGB */
-
     while (wl_display_prepare_read_queue (src->display, src->queue) != 0)
       wl_display_dispatch_queue_pending (src->display, src->queue);
 
