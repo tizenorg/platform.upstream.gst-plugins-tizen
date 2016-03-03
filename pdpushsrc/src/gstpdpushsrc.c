@@ -377,7 +377,7 @@ gst_pd_pushsrc_create_read (GstBaseSrc * basesrc, guint64 offset, guint length, 
       if (fstat (src->fd, &stat_results) < 0)
         goto could_not_stat;
 
-      avail_size = stat_results.st_size;
+      avail_size = (guint64)stat_results.st_size;
 
       GST_LOG_OBJECT (src, "Available data size in file = %"G_GUINT64_FORMAT, avail_size);
 
