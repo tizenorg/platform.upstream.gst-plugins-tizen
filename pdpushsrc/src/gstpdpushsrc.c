@@ -118,7 +118,7 @@ static gboolean gst_pd_pushsrc_checkgetrange (GstPad * pad);
 
 G_DEFINE_TYPE_WITH_CODE (GstPDPushSrc, gst_pd_pushsrc, GST_TYPE_BASE_SRC,
                          G_IMPLEMENT_INTERFACE(GST_TYPE_URI_HANDLER, gst_pd_pushsrc_uri_handler_init));
-
+#if 0
 static void
 gst_pd_pushsrc_base_init (gpointer g_class)
 {
@@ -126,7 +126,7 @@ gst_pd_pushsrc_base_init (gpointer g_class)
 
   GST_LOG ("OUT");
 }
-
+#endif
 static void
 gst_pd_pushsrc_class_init (GstPDPushSrcClass * klass)
 {
@@ -188,7 +188,6 @@ static void
 gst_pd_pushsrc_init (GstPDPushSrc * src)
 {
   GST_LOG ("IN");
-  GstBaseSrc *basesrc = GST_BASE_SRC (src);
 
   src->filename = NULL;
   src->fd = 0;
@@ -335,7 +334,7 @@ gst_pd_pushsrc_create_read (GstBaseSrc * basesrc, guint64 offset, guint length, 
   if (fstat (src->fd, &stat_results) < 0)
     goto could_not_stat;
 
-  GST_LOG_OBJECT (src, "offset + length = %"G_GUINT64_FORMAT " and filesize = %"G_GUINT64_FORMAT, offset + length, stat_results.st_size);
+  GST_LOG_OBJECT (src, "offset + length = %"G_GUINT64_FORMAT " and filesize = %"G_GUINT64_FORMAT, offset + length, (guint64)stat_results.st_size);
 
   while ((offset + length) > stat_results.st_size)
   {
@@ -484,10 +483,8 @@ gst_pd_pushsrc_create (GstBaseSrc * basesrc, guint64 offset, guint length, GstBu
 {
   GST_LOG ("IN");
 
-  GstPDPushSrc *pdsrc;
   GstFlowReturn ret;
 
-  pdsrc = GST_PD_PUSHSRC_CAST (basesrc);
   ret = gst_pd_pushsrc_create_read (basesrc, offset, length, buffer);
   GST_LOG ("OUT");
 

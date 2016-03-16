@@ -78,6 +78,7 @@ static GstFlowReturn gst_audiotp_push_silent_frame (Gstaudiotp *audiotp, GstBuff
 //        Gstreamer Base Functions                    //
 ////////////////////////////////////////////////////////
 
+#if 0
 /**
  **
  **  Description: The element details and pad templates are registered with the plugin
@@ -91,7 +92,7 @@ static void
 gst_audiotp_base_init(gpointer klass)
 {
 }
-
+#endif
 
 /**
  **

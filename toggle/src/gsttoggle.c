@@ -54,7 +54,7 @@ enum
 {
   PROP_0,
   PROP_BLOCK_DATA
- 
+
 };
 
 
@@ -75,16 +75,16 @@ static GstFlowReturn gst_mytoggle_transform_ip (GstBaseTransform * trans,
 static gboolean gst_mytoggle_start (GstBaseTransform * trans);
 static gboolean gst_mytoggle_stop (GstBaseTransform * trans);
 
+#if 0
 static void
 gst_mytoggle_base_init (gpointer g_class)
 {
 }
+#endif
 
 static void
 gst_mytoggle_finalize (GObject * object)
 {
-  GstMytoggle *mytoggle;
-
   G_OBJECT_CLASS (gst_mytoggle_parent_class)->finalize (object);
 }
 
@@ -105,9 +105,9 @@ gst_mytoggle_class_init (GstMytoggleClass * klass)
   g_object_class_install_property (gobject_class,
       PROP_BLOCK_DATA, g_param_spec_boolean ("block_data",
           "Data Block",
-          "Data Block", 
+          "Data Block",
           DEFAULT_BLOCK_DATA, G_PARAM_READWRITE));
-    
+
   gobject_class->finalize = GST_DEBUG_FUNCPTR (gst_mytoggle_finalize);
 
   gst_element_class_set_details_simple (gstelement_class,
@@ -138,8 +138,8 @@ static GstFlowReturn
 gst_mytoggle_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
 {
   GstMytoggle *mytoggle = GST_MYTOGGLE (trans);
- 
-  if (mytoggle->block_data ==TRUE) 
+
+  if (mytoggle->block_data ==TRUE)
       return GST_BASE_TRANSFORM_FLOW_DROPPED;
 
   return GST_FLOW_OK;
@@ -154,7 +154,7 @@ gst_mytoggle_set_property (GObject * object, guint prop_id,
   mytoggle = GST_MYTOGGLE (object);
 
   switch (prop_id) {
-  
+
     case PROP_BLOCK_DATA:
       mytoggle->block_data = g_value_get_boolean (value);
       break;
@@ -206,5 +206,5 @@ GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
 	toggle,
 	"Base transform plugin template",
 	plugin_init, VERSION, "LGPL", "Samsung Electronics Co", "http://www.samsung.com/")
-	
+
 
