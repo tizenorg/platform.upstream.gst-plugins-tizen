@@ -112,9 +112,6 @@ static void gst_iir_equalizer_child_proxy_interface_init (gpointer g_iface,
 
 static void gst_iir_equalizer_finalize (GObject * object);
 
-static gboolean gst_iir_equalizer_setup (GstAudioFilter * filter,
-    GstAudioRingBufferSpec * fmt);
-
 G_DEFINE_TYPE_WITH_CODE(Gstaudioeq, gst_audioeq, GST_TYPE_BASE_TRANSFORM,
                         G_IMPLEMENT_INTERFACE(GST_TYPE_CHILD_PROXY, gst_iir_equalizer_child_proxy_interface_init));
 
@@ -157,12 +154,14 @@ gst_audioeq_change_state (GstElement * element, GstStateChange transition)
 	return ret;
 }
 
+#if 0
 static void
 gst_audioeq_base_init (gpointer gclass)
 {
 
   GST_DEBUG ("gst_audioeq_base_init");
 }
+#endif
 
 static void
 gst_audioeq_class_init (GstaudioeqClass * klass)
@@ -230,7 +229,8 @@ gst_audioeq_init (Gstaudioeq * audioeq)
 	audioeq->filter_action = DEFAULT_FILTER_ACTION;
 	memset(audioeq->custom_eq, 0x00, sizeof(gint) * CUSTOM_EQ_BAND_MAX);
 	audioeq->need_update_filter = TRUE;
-	audioeq->equ.bands_lock = g_mutex_new ();
+
+	g_mutex_init(&audioeq->equ.bands_lock);
 	audioeq->equ.need_new_coefficients = TRUE;
 	gst_iir_equalizer_compute_frequencies (audioeq, DEFAULT_CUSTOM_EQ_NUM);
 }
@@ -254,13 +254,11 @@ gst_iir_equalizer_finalize (GObject * object)
   g_free (equ->bands);
   g_free (equ->history);
 
-  g_mutex_free (equ->bands_lock);
-
   G_OBJECT_CLASS (gst_audioeq_parent_class)->finalize (object);
 }
 
-#define BANDS_LOCK(equ) g_mutex_lock(equ->bands_lock)
-#define BANDS_UNLOCK(equ) g_mutex_unlock(equ->bands_lock)
+#define BANDS_LOCK(equ) g_mutex_lock(&equ->bands_lock)
+#define BANDS_UNLOCK(equ) g_mutex_unlock(&equ->bands_lock)
 
 /* child object */
 
@@ -564,7 +562,8 @@ static void
 gst_iir_equalizer_init (GstIirEqualizer * eq, GstIirEqualizerClass * g_class)
 {
   GST_DEBUG ("gst_iir_equalizer_init");
-  eq->bands_lock = g_mutex_new ();
+
+  g_mutex_init(&eq->bands_lock);
   eq->need_new_coefficients = TRUE;
 }
 
@@ -1238,6 +1237,7 @@ GST_DEBUG ("gst_audioeq_get_property");
 	}
 }
 
+#if 0
 static gboolean
 gst_iir_equalizer_setup (GstAudioFilter * audio, GstAudioRingBufferSpec * fmt)
 {
@@ -1270,7 +1270,7 @@ GST_DEBUG ("gst_iir_equalizer_setup");
   alloc_history (equ);
   return TRUE;
 }
-
+#endif
 
 static gboolean
 plugin_init (GstPlugin * plugin)

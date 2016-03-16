@@ -54,6 +54,7 @@ static void gst_drm_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
 
 G_DEFINE_TYPE_WITH_CODE (GstDrmSrc, gst_drm_src, GST_TYPE_BASE_SRC,
                          G_IMPLEMENT_INTERFACE(GST_TYPE_URI_HANDLER, gst_drm_src_uri_handler_init));
+#if 0
 /**
  * This function does the following:
  *  1. Sets the class details
@@ -66,6 +67,8 @@ G_DEFINE_TYPE_WITH_CODE (GstDrmSrc, gst_drm_src, GST_TYPE_BASE_SRC,
 static void gst_drm_src_base_init (gpointer g_class)
 {
 }
+#endif
+
 /**
  * This function does the following:
  *  1. Installs the properties
@@ -366,7 +369,6 @@ static gboolean gst_drm_src_get_size (GstBaseSrc * basesrc, guint64 * size)
 {
 	struct stat stat_results;
 	GstDrmSrc *src = GST_DRM_SRC (basesrc);
-	unsigned int offset;
 
 	//  1. Gets the filesize for drm file by using seek oprations
 
