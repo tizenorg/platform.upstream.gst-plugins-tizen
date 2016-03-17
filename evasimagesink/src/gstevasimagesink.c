@@ -268,13 +268,6 @@ gst_evas_image_sink_finalize (GObject * object)
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
-
-
-static void
-gst_evas_image_sink_base_init (gpointer gclass)
-{
-}
-
 static void
 gst_evas_image_sink_class_init (GstEvasImageSinkClass *klass)
 {
@@ -346,19 +339,19 @@ gst_evas_image_sink_fini (gpointer data, GObject *obj)
 	if (esink->eo) {
 #ifdef USE_TBM_SURFACE
 		EVASIMAGESINK_UNSET_EVAS_EVENT_CALLBACK (evas_object_evas_get(esink->eo));
-		GST_DEBUG("unset EVASIMAGESINK_UNSET_EVAS_EVENT_CALLBACK esink : %p, esink->eo : %x", esink, esink->eo);
+		GST_DEBUG("unset EVASIMAGESINK_UNSET_EVAS_EVENT_CALLBACK esink : %p, esink->eo : %p", esink, esink->eo);
 #endif
 		EVASIMAGESINK_UNSET_EVAS_OBJECT_EVENT_CALLBACK (esink->eo);
-		GST_DEBUG("unset EVASIMAGESINK_UNSET_EVAS_OBJECT_EVENT_CALLBACK esink : %p, esink->eo : %x", esink, esink->eo);
+		GST_DEBUG("unset EVASIMAGESINK_UNSET_EVAS_OBJECT_EVENT_CALLBACK esink : %p, esink->eo : %p", esink, esink->eo);
 		evas_object_image_data_set(esink->eo, NULL);
 	}
 #ifdef USE_TBM_SURFACE
 	if (esink->display_buffer_lock) {
-		g_mutex_free (esink->display_buffer_lock);
+		g_mutex_clear (esink->display_buffer_lock);
 		esink->display_buffer_lock = NULL;
 	}
 	if (esink->flow_lock) {
-		g_mutex_free (esink->flow_lock);
+		g_mutex_clear (esink->flow_lock);
 		esink->flow_lock = NULL;
 	}
 	esink->eo = NULL;
@@ -368,7 +361,7 @@ gst_evas_image_sink_fini (gpointer data, GObject *obj)
 	instance_lock_count--;
 	g_mutex_unlock (instance_lock);
 	if (instance_lock_count == 0) {
-		g_mutex_free (instance_lock);
+		g_mutex_clear (instance_lock);
 		instance_lock = NULL;
 	}
 
@@ -455,7 +448,7 @@ evas_image_sink_cb_pipe (void *data, int *buffer_index, unsigned int nbyte)
 		GST_WARNING ("esink : %p, or eo is NULL returning", esink);
 		return;
 	}
-	GST_LOG("esink : %p, esink->eo : %x", esink, esink->eo);
+	GST_LOG("esink : %p, esink->eo : %p", esink, esink->eo);
 	if (nbyte == SIZE_FOR_UPDATE_VISIBILITY) {
 		if(!esink->object_show) {
 			evas_object_hide(esink->eo);
@@ -639,7 +632,7 @@ evas_image_sink_cb_pipe (void *data, int *buffer_index, unsigned int nbyte)
 			GST_WARNING ("Cannot get image data from evas object or cannot get gstbuffer data");
 			evas_object_image_data_set(esink->eo, img_data);
 		} else {
-			GST_DEBUG ("img_data(%x), buf_info.data:%x, esink->w(%d),esink->h(%d), esink->eo(%x)",img_data,buf_info.data,esink->w,esink->h,esink->eo);
+			GST_DEBUG ("img_data(%p), buf_info.data:%p, esink->w(%d),esink->h(%d), esink->eo(%p)",img_data,buf_info.data,esink->w,esink->h,esink->eo);
 			memcpy (img_data, buf_info.data, esink->w * esink->h * COLOR_DEPTH);
 			evas_object_image_pixels_dirty_set (esink->eo, 1);
 			evas_object_image_data_set(esink->eo, img_data);
@@ -648,7 +641,7 @@ evas_image_sink_cb_pipe (void *data, int *buffer_index, unsigned int nbyte)
 		gst_buffer_unref (buf);
 	} else {
 		gst_buffer_map(buf, &buf_info, GST_MAP_READ);
-		GST_DEBUG ("buf_info.data(buf):%x, esink->eo(%x)",buf_info.data,esink->eo);
+		GST_DEBUG ("buf_info.data(buf):%p, esink->eo(%p)",buf_info.data,esink->eo);
 		evas_object_image_data_set (esink->eo, buf_info.data);
 		gst_buffer_unmap(buf, &buf_info);
 		evas_object_image_pixels_dirty_set (esink->eo, 1);
@@ -794,8 +787,8 @@ gst_evas_image_sink_init (GstEvasImageSink *esink)
 	esink->present_data_addr = -1;
 #endif
 #ifdef USE_TBM_SURFACE
-	esink->display_buffer_lock = g_mutex_new ();
-	esink->flow_lock = g_mutex_new ();
+	g_mutex_init (esink->display_buffer_lock);
+	g_mutex_init (esink->flow_lock);
 	int i = 0;
 	for (i=0; i<TBM_SURFACE_NUM; i++)
 	{
@@ -822,7 +815,7 @@ gst_evas_image_sink_init (GstEvasImageSink *esink)
 	esink->is_buffer_allocated = FALSE;
 #endif
 	if(!instance_lock) {
-		instance_lock = g_mutex_new();
+		g_mutex_init(instance_lock);
 	}
 	g_mutex_lock (instance_lock);
 	instance_lock_count++;
@@ -851,10 +844,10 @@ evas_callback_del_event (void *data, Evas *e, Evas_Object *obj, void *event_info
 	if (esink->eo) {
 #ifdef USE_TBM_SURFACE
 		EVASIMAGESINK_UNSET_EVAS_EVENT_CALLBACK (evas_object_evas_get(esink->eo));
-		GST_DEBUG("unset EVASIMAGESINK_UNSET_EVAS_EVENT_CALLBACK esink : %p, esink->eo : %x", esink, esink->eo);
+		GST_DEBUG("unset EVASIMAGESINK_UNSET_EVAS_EVENT_CALLBACK esink : %p, esink->eo : %p", esink, esink->eo);
 #endif
 		EVASIMAGESINK_UNSET_EVAS_OBJECT_EVENT_CALLBACK (esink->eo);
-		GST_DEBUG("unset EVASIMAGESINK_UNSET_EVAS_OBJECT_EVENT_CALLBACK esink : %p, esink->eo : %x", esink, esink->eo);
+		GST_DEBUG("unset EVASIMAGESINK_UNSET_EVAS_OBJECT_EVENT_CALLBACK esink : %p, esink->eo : %p", esink, esink->eo);
 
 		evas_object_image_data_set(esink->eo, NULL);
 		esink->eo = NULL;
@@ -1123,8 +1116,6 @@ evas_image_sink_event_parse_data (GstEvasImageSink *esink, GstEvent *event)
 {
 	const GstStructure *st;
 	guint st_data_addr = 0;
-	gint st_data_width = 0;
-	gint st_data_height = 0;
 
 	g_return_val_if_fail (event != NULL, FALSE);
 	g_return_val_if_fail (esink != NULL, FALSE);
@@ -1152,8 +1143,6 @@ gst_evas_image_sink_event (GstBaseSink *sink, GstEvent *event)
 {
 #ifdef USE_FIMCC
 	GstEvasImageSink *esink = GST_EVASIMAGESINK (sink);
-	GstMessage *msg;
-	gchar *str;
 #endif
 	switch (GST_EVENT_TYPE (event)) {
 		case GST_EVENT_FLUSH_START:
@@ -1189,7 +1178,9 @@ gst_evas_image_sink_change_state (GstElement *element, GstStateChange transition
 {
 	GstStateChangeReturn ret_state = GST_STATE_CHANGE_SUCCESS;
 	GstEvasImageSink *esink = NULL;
+#ifdef USE_TBM_SURFACE
 	GstFlowReturn ret=GST_FLOW_OK;
+#endif
 	esink = GST_EVASIMAGESINK(element);
 
 	if(!esink) {
@@ -1307,7 +1298,7 @@ gst_evas_image_sink_set_property (GObject *object, guint prop_id, const GValue *
 				/* add evas object callbacks on a new evas image object */
 				EVASIMAGESINK_SET_EVAS_OBJECT_EVENT_CALLBACK (esink->eo, esink);
 #ifdef USE_TBM_SURFACE
-				GST_WARNING("register render callback [esink : %p, esink->eo : %x]", esink, esink->eo);
+				GST_WARNING("register render callback [esink : %p, esink->eo : %p]", esink, esink->eo);
 				EVASIMAGESINK_SET_EVAS_EVENT_CALLBACK (evas_object_evas_get(esink->eo), esink);
 				evas_object_geometry_get(esink->eo, &esink->eo_size.x, &esink->eo_size.y, &esink->eo_size.w, &esink->eo_size.h);
 				GST_WARNING ("evas object size (x:%d, y:%d, w:%d, h:%d)", esink->eo_size.x, esink->eo_size.y, esink->eo_size.w, esink->eo_size.h);
@@ -1319,7 +1310,7 @@ gst_evas_image_sink_set_property (GObject *object, guint prop_id, const GValue *
 					GST_DEBUG("Enable gl zerocopy");
 				}
 #endif
-				GST_DEBUG("Evas Image Object(%x) is set", esink->eo);
+				GST_DEBUG("Evas Image Object(%p) is set", esink->eo);
 				esink->is_evas_object_size_set = FALSE;
 				esink->object_show = TRUE;
 				esink->update_visibility = UPDATE_TRUE;
@@ -1464,7 +1455,7 @@ gst_evas_image_sink_set_caps (GstBaseSink *base_sink, GstCaps *caps)
 	int w, h;
 	GstEvasImageSink *esink = GST_EVASIMAGESINK (base_sink);
 	GstStructure *structure = NULL;
-	gchar *format = NULL;
+	const gchar *format = NULL;
 
 	esink->is_evas_object_size_set = FALSE;
 	r = evas_image_sink_get_size_from_caps (caps, &w, &h);
@@ -1804,9 +1795,13 @@ gst_evas_image_sink_show_frame (GstVideoSink *video_sink, GstBuffer *buf)
 
 		g_mutex_unlock(esink->display_buffer_lock);
 #endif
-		GST_DEBUG ("ecore_pipe_write() was called with gst_buf= %p..  gst_buf Vaddr=%p, mallocdata= %p", buf, buf_info.size, buf_info.memory);
+		GST_DEBUG ("ecore_pipe_write() was called with gst_buf= %p..  gst_buf size=%d, mallocdata= %p", buf, buf_info.size, buf_info.memory);
 	} else {
-		GST_WARNING ("skip ecore_pipe_write(). becuase of esink->object_show(%d) index(%d)", esink->object_show, index);
+#ifdef USE_TBM_SURFACE
+		GST_WARNING ("skip ecore_pipe_write(). becuase of esink->object_show(%d) index %d", esink->object_show, index);
+#else
+		GST_WARNING ("skip ecore_pipe_write(). becuase of esink->object_show(%d)", esink->object_show);
+#endif
 	}
 	gst_buffer_unmap(buf, &buf_info);
 	g_mutex_unlock (instance_lock);
