@@ -526,6 +526,11 @@ static void gst_tizenipc_src_buffer_finalize(GstTizenipcSrcBuffer *ipc_buf)
   self = ipc_buf->self;
   mm_buf = ipc_buf->mm_buf;
 
+  if (self == NULL) {
+    GST_ERROR("NULL handle");
+    goto _BUFFER_FINALIZE_DONE;
+  }
+
   /* send message to sink for current tbm key */
   if (self->socket_fd > -1) {
     send_msg.id = TIZEN_IPC_BUFFER_RELEASE;
@@ -536,20 +541,6 @@ static void gst_tizenipc_src_buffer_finalize(GstTizenipcSrcBuffer *ipc_buf)
     }
   } else {
     GST_ERROR_OBJECT(self, "invalid socket fd %d", self->socket_fd);
-  }
-
-  if (mm_buf) {
-    for (i = 0 ; i < mm_buf->handle_num ; i++) {
-      if (mm_buf->handle.bo[i]) {
-        tbm_bo_unref(mm_buf->handle.bo[i]);
-        mm_buf->handle.bo[i] = NULL;
-      } else {
-        break;
-      }
-    }
-
-    free(mm_buf);
-    mm_buf = NULL;
   }
 
   /* send buffer signal */
@@ -563,9 +554,22 @@ static void gst_tizenipc_src_buffer_finalize(GstTizenipcSrcBuffer *ipc_buf)
 
   g_mutex_unlock(&self->buffer_lock);
 
-  if (self) {
-    gst_object_unref(self);
-    self = NULL;
+  gst_object_unref(self);
+  self = NULL;
+
+_BUFFER_FINALIZE_DONE:
+  if (mm_buf) {
+    for (i = 0 ; i < mm_buf->handle_num ; i++) {
+      if (mm_buf->handle.bo[i]) {
+        tbm_bo_unref(mm_buf->handle.bo[i]);
+        mm_buf->handle.bo[i] = NULL;
+      } else {
+        break;
+      }
+    }
+
+    free(mm_buf);
+    mm_buf = NULL;
   }
 
   free(ipc_buf);
@@ -607,10 +611,12 @@ static GstFlowReturn gst_tizenipc_src_create(GstPushSrc *psrc, GstBuffer **outbu
 
 again:
   if (gst_poll_wait (self->poll, GST_CLOCK_TIME_NONE) < 0) {
+    char str_error[64] = {'\0',};
     if (errno == EBUSY)
       return GST_FLOW_FLUSHING;
+    strerror_r(errno, str_error, sizeof(str_error));
     GST_ELEMENT_ERROR(self, RESOURCE, READ, ("Failed to read from sink"),
-        ("Poll failed on fd: %s", strerror (errno)));
+        ("Poll failed on fd: %s", str_error));
     return GST_FLOW_ERROR;
   }
 
@@ -859,11 +865,6 @@ _CREATE_FAILED:
   if (mm_buf) {
     free(mm_buf);
     mm_buf = NULL;
-  }
-
-  if (gst_memory) {
-    gst_memory_unref(gst_memory);
-    gst_memory = NULL;
   }
 
   if (gst_buf) {
