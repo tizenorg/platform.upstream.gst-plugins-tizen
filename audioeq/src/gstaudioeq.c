@@ -869,7 +869,7 @@ gst_iir_equalizer_compute_frequencies (Gstaudioeq * audioeq, guint new_count)
     for (i = old_count; i < new_count; i++) {
       equ->bands[i] = g_object_new (GST_TYPE_IIR_EQUALIZER_BAND, NULL);
       /* otherwise they get names like 'iirequalizerband5' */
-      sprintf (name, "band%u", i);
+      snprintf (name, sizeof(name), "band%u", i);
       gst_object_set_name (GST_OBJECT (equ->bands[i]), name);
       GST_DEBUG ("adding band[%d]=%p", i, equ->bands[i]);
 
@@ -1047,9 +1047,9 @@ gst_audioeq_transform_ip (GstBaseTransform * base, GstBuffer * buf)
   if (G_UNLIKELY (audioeq->channels < 1 || equ->process == NULL)) {
     GST_DEBUG ("gst_audioeq_transform_ip return GST_FLOW_NOT_NEGOTIATED;");
     if (G_UNLIKELY (equ->process == NULL))
-    GST_DEBUG ("gst_audioeq_transform_ip equ->process ");
+      GST_DEBUG ("gst_audioeq_transform_ip equ->process ");
     if (G_UNLIKELY (audioeq->channels < 1))
-    GST_DEBUG ("gst_audioeq_transform_ip audioeq->channels");
+      GST_DEBUG ("gst_audioeq_transform_ip audioeq->channels");
     return GST_FLOW_NOT_NEGOTIATED;
   }
       GST_DEBUG ("gst_audioeq_transform_ip  BANDS_LOCK (equ);");
