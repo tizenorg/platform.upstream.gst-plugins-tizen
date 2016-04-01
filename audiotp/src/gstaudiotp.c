@@ -63,7 +63,7 @@ GST_DEBUG_CATEGORY_STATIC(gst_audiotp_debug);
 
 G_DEFINE_TYPE_WITH_CODE(Gstaudiotp, gst_audiotp, GST_TYPE_ELEMENT, _do_init(G_TYPE_INVALID));
 
-static void gst_audiotp_base_init(gpointer klass);
+/* static void gst_audiotp_base_init(gpointer klass); */
 static void gst_audiotp_class_init(GstaudiotpClass *klass);
 static void gst_audiotp_init(Gstaudiotp *dec);
 static GstFlowReturn gst_audiotp_chain(GstPad *pad, GstObject *parent, GstBuffer *buf);
@@ -265,12 +265,12 @@ gst_audiotp_sink_event (GstPad *pad, GstObject *parent, GstEvent *event)
 
       /* If we receive new_segment without FLUSH events, then we will push all the frame in queue */
       while (!g_queue_is_empty (audiotp->reverse)) {
-	    GstBuffer *MetaDataBuf;
+        GstBuffer *MetaDataBuf;
         GstFlowReturn ret = GST_FLOW_OK;
-		if(audiotp->is_reversed)
+        if(audiotp->is_reversed)
           MetaDataBuf = g_queue_pop_head (audiotp->reverse);
-		else
-		  MetaDataBuf = g_queue_pop_tail (audiotp->reverse);
+        else
+          MetaDataBuf = g_queue_pop_tail (audiotp->reverse);
         ret = gst_audiotp_push_silent_frame (audiotp, MetaDataBuf);
         if (GST_FLOW_OK != ret)
         {
@@ -286,12 +286,12 @@ gst_audiotp_sink_event (GstPad *pad, GstObject *parent, GstEvent *event)
     case GST_EVENT_EOS: {
       /* queue all buffer timestamps till we receive next discontinuity */
       while (!g_queue_is_empty (audiotp->reverse)) {
-	    GstBuffer *MetaDataBuf;
+        GstBuffer *MetaDataBuf;
         GstFlowReturn ret = GST_FLOW_OK;
-		if(audiotp->is_reversed)
+        if(audiotp->is_reversed)
           MetaDataBuf = g_queue_pop_head (audiotp->reverse);
-		else
-		  MetaDataBuf = g_queue_pop_tail (audiotp->reverse);
+        else
+          MetaDataBuf = g_queue_pop_tail (audiotp->reverse);
         ret = gst_audiotp_push_silent_frame (audiotp, MetaDataBuf);
         if (GST_FLOW_OK != ret) {
           GST_WARNING_OBJECT (audiotp, "pad_push returned = %s", gst_flow_get_name (ret));
@@ -352,7 +352,7 @@ gst_audiotp_chain(GstPad *pad, GstObject *parent, GstBuffer *buf)
 
   if(buf == NULL) {
     ret = GST_FLOW_ERROR;
-	goto error_exit;
+    goto error_exit;
   }
 
   GST_LOG_OBJECT (audiotp, "Input buffer : ts =%" GST_TIME_FORMAT ", dur=%" GST_TIME_FORMAT ", size=%d %s",
@@ -378,7 +378,7 @@ send_reverse:
   {
     GstBuffer *MetaDataBuf = NULL;
     GstClockTime headbuf_ts = GST_CLOCK_TIME_NONE;
-	GstClockTime tailbuf_ts = GST_CLOCK_TIME_NONE;
+    GstClockTime tailbuf_ts = GST_CLOCK_TIME_NONE;
 
     /* Discont buffers is mostly due to seek, when buffers of seeked timestamp gets pushed */
     if (GST_BUFFER_IS_DISCONT(buf)) {
@@ -387,7 +387,7 @@ send_reverse:
         GstBuffer *tailbuf = (GstBuffer*) (audiotp->reverse->tail->data);
 
         headbuf_ts = GST_BUFFER_TIMESTAMP(headbuf);
-		tailbuf_ts = GST_BUFFER_TIMESTAMP(tailbuf);
+        tailbuf_ts = GST_BUFFER_TIMESTAMP(tailbuf);
 
         GST_DEBUG_OBJECT(audiotp,"Headbuf ts =%" GST_TIME_FORMAT ", TailBuf ts =%" GST_TIME_FORMAT "",
             GST_TIME_ARGS(GST_BUFFER_TIMESTAMP(headbuf)),
@@ -416,12 +416,12 @@ send_reverse:
           goto error_exit;
         }
 
-	   /* If buffers arrive in forward order, compare the MetaDatabuf with
-		* previous head buffer timestamp.
-		* If buffers arrive in reverse order, compare the MetaDataBuf with
-		* previous tail buffer timestamp */
-        if((GST_BUFFER_TIMESTAMP(MetaDataBuf) < audiotp->head_prev && !audiotp->is_reversed)
-				|| (GST_BUFFER_TIMESTAMP(MetaDataBuf) < audiotp->tail_prev && audiotp->is_reversed)) {
+          /* If buffers arrive in forward order, compare the MetaDatabuf with
+           * previous head buffer timestamp.
+           * If buffers arrive in reverse order, compare the MetaDataBuf with
+           * previous tail buffer timestamp */
+          if((GST_BUFFER_TIMESTAMP(MetaDataBuf) < audiotp->head_prev && !audiotp->is_reversed)
+            || (GST_BUFFER_TIMESTAMP(MetaDataBuf) < audiotp->tail_prev && audiotp->is_reversed)) {
           ret = gst_audiotp_push_silent_frame (audiotp, MetaDataBuf);
           if (MetaDataBuf) {
             gst_buffer_unref (MetaDataBuf);
@@ -447,7 +447,7 @@ send_reverse:
       }
 
       audiotp->head_prev = headbuf_ts;
-	  audiotp->tail_prev = tailbuf_ts;
+      audiotp->tail_prev = tailbuf_ts;
     }
 
     MetaDataBuf = gst_buffer_new ();
