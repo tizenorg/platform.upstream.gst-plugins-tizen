@@ -2071,7 +2071,7 @@ gst_wfd_base_src_loop (GstWFDBaseSrc * src)
         /* server closed the connection.*/
         GST_ELEMENT_WARNING (src, RESOURCE, READ, (NULL),
             ("The server closed the connection."));
-        gst_element_post_message (GST_ELEMENT_CAST (src), gst_message_new_element (GST_OBJECT_CAST (src), gst_structure_new ("GstWFDSrcSessionTimeout", NULL)));
+        gst_element_post_message (GST_ELEMENT_CAST (src), gst_message_new_element (GST_OBJECT_CAST (src), gst_structure_new ("GstWFDSrcSessionTimeout", NULL, NULL)));
 
         goto connect_error;
       default:
