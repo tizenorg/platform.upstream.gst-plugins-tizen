@@ -166,73 +166,73 @@ gst_audioeq_base_init (gpointer gclass)
 static void
 gst_audioeq_class_init (GstaudioeqClass * klass)
 {
-       GST_DEBUG ("gst_audioeq_class_init");
-	GObjectClass *gobject_class;
-	GstElementClass *gstelement_class;
-	GstBaseTransformClass *basetransform_class;
+  GST_DEBUG ("gst_audioeq_class_init");
+  GObjectClass *gobject_class;
+  GstElementClass *gstelement_class;
+  GstBaseTransformClass *basetransform_class;
 
-	gobject_class = G_OBJECT_CLASS (klass);
-	gstelement_class = GST_ELEMENT_CLASS (klass);
-	basetransform_class = GST_BASE_TRANSFORM_CLASS(klass);
+  gobject_class = G_OBJECT_CLASS (klass);
+  gstelement_class = GST_ELEMENT_CLASS (klass);
+  basetransform_class = GST_BASE_TRANSFORM_CLASS(klass);
 
-	gobject_class->set_property = GST_DEBUG_FUNCPTR(gst_audioeq_set_property);
-	gobject_class->get_property = GST_DEBUG_FUNCPTR(gst_audioeq_get_property);
+  gobject_class->set_property = GST_DEBUG_FUNCPTR(gst_audioeq_set_property);
+  gobject_class->get_property = GST_DEBUG_FUNCPTR(gst_audioeq_get_property);
 
-	gst_element_class_add_pad_template(gstelement_class,
-		gst_static_pad_template_get (&srctemplate));
-	gst_element_class_add_pad_template(gstelement_class,
-		gst_static_pad_template_get (&sinktemplate));
+  gst_element_class_add_pad_template(gstelement_class,
+  gst_static_pad_template_get (&srctemplate));
+  gst_element_class_add_pad_template(gstelement_class,
+  gst_static_pad_template_get (&sinktemplate));
 
-	gst_element_class_set_static_metadata(gstelement_class,
-	        "Audio Equalizer",
-	        "Filter/Effect/Audio",
-	        "Set equalisation effect on audio/raw streams",
-	        "Samsung Electronics <www.samsung.com>");
-	gstelement_class->change_state = GST_DEBUG_FUNCPTR(gst_audioeq_change_state);
+  gst_element_class_set_static_metadata(gstelement_class,
+    "Audio Equalizer",
+    "Filter/Effect/Audio",
+    "Set equalisation effect on audio/raw streams",
+    "Samsung Electronics <www.samsung.com>");
+  gstelement_class->change_state = GST_DEBUG_FUNCPTR(gst_audioeq_change_state);
 
-	g_object_class_install_property(gobject_class, PROP_FILTER_ACTION,
-		g_param_spec_uint("filter-action", "filter action", "(0)none (1)preset (2)advanced setting",
-		0, 2, DEFAULT_FILTER_ACTION, G_PARAM_READWRITE));
+  g_object_class_install_property(gobject_class, PROP_FILTER_ACTION,
+    g_param_spec_uint("filter-action", "filter action", "(0)none (1)preset (2)advanced setting",
+      0, 2, DEFAULT_FILTER_ACTION, G_PARAM_READWRITE));
 
-	g_object_class_install_property (gobject_class, PROP_CUSTOM_EQ,
-		g_param_spec_pointer("custom-eq", "custom eq",
-		"pointer for 9 bands of EQ array", G_PARAM_READWRITE));
+  g_object_class_install_property (gobject_class, PROP_CUSTOM_EQ,
+    g_param_spec_pointer("custom-eq", "custom eq",
+      "pointer for 9 bands of EQ array", G_PARAM_READWRITE));
 
-	g_object_class_install_property(gobject_class, PROP_CUSTOM_EQ_NUM,
-		g_param_spec_uint("custom-eq-num", "custom eq num", "number of custom EQ bands",
-		0, 9, DEFAULT_CUSTOM_EQ_NUM, G_PARAM_READABLE));
+  g_object_class_install_property(gobject_class, PROP_CUSTOM_EQ_NUM,
+    g_param_spec_uint("custom-eq-num", "custom eq num", "number of custom EQ bands",
+      0, 9, DEFAULT_CUSTOM_EQ_NUM, G_PARAM_READABLE));
 
-	g_object_class_install_property(gobject_class, PROP_CUSTOM_EQ_FREQ,
-		g_param_spec_pointer("custom-eq-freq", "custom eq freq", "pointer for EQ bands central frequency(Hz) array",
-		G_PARAM_READABLE));
+  g_object_class_install_property(gobject_class, PROP_CUSTOM_EQ_FREQ,
+    g_param_spec_pointer("custom-eq-freq", "custom eq freq", "pointer for EQ bands central frequency(Hz) array",
+      G_PARAM_READABLE));
 
-	g_object_class_install_property(gobject_class, PROP_CUSTOM_EQ_WIDTH,
-		g_param_spec_pointer("custom-eq-width", "custom eq width", "pointer for EQ bands width(Hz) array",
-		G_PARAM_READABLE));
+  g_object_class_install_property(gobject_class, PROP_CUSTOM_EQ_WIDTH,
+    g_param_spec_pointer("custom-eq-width", "custom eq width", "pointer for EQ bands width(Hz) array",
+      G_PARAM_READABLE));
 
-	gobject_class->finalize = GST_DEBUG_FUNCPTR(gst_iir_equalizer_finalize);
+  gobject_class->finalize = GST_DEBUG_FUNCPTR(gst_iir_equalizer_finalize);
 
 /* It is possible to reduce memcpy by setting output same as input of AudioEq_InOutConfig */
 #ifdef AUDIOEQ_REDUCE_MEMCPY
-	basetransform_class->transform_ip = GST_DEBUG_FUNCPTR(gst_audioeq_transform_ip);
+  basetransform_class->transform_ip = GST_DEBUG_FUNCPTR(gst_audioeq_transform_ip);
 #endif
-	basetransform_class->set_caps = GST_DEBUG_FUNCPTR(gst_audioeq_set_caps);
+  basetransform_class->set_caps = GST_DEBUG_FUNCPTR(gst_audioeq_set_caps);
 }
 
 static void
 gst_audioeq_init (Gstaudioeq * audioeq)
 {
   GST_DEBUG ("gst_audioeq_init");
-	audioeq->samplerate = DEFAULT_SAMPLE_RATE;
-	audioeq->channels = DEAFULT_CHANNELS;
+  audioeq->samplerate = DEFAULT_SAMPLE_RATE;
+  audioeq->channels = DEAFULT_CHANNELS;
 
-	audioeq->filter_action = DEFAULT_FILTER_ACTION;
-	memset(audioeq->custom_eq, 0x00, sizeof(gint) * CUSTOM_EQ_BAND_MAX);
-	audioeq->need_update_filter = TRUE;
+  audioeq->filter_action = DEFAULT_FILTER_ACTION;
+  memset(audioeq->custom_eq, 0x00, sizeof(gint) * CUSTOM_EQ_BAND_MAX);
+  audioeq->need_update_filter = TRUE;
 
-	g_mutex_init(&audioeq->equ.bands_lock);
-	audioeq->equ.need_new_coefficients = TRUE;
-	gst_iir_equalizer_compute_frequencies (audioeq, DEFAULT_CUSTOM_EQ_NUM);
+  g_mutex_init(&audioeq->equ.bands_lock);
+  audioeq->equ.need_new_coefficients = TRUE;
+  gst_iir_equalizer_compute_frequencies (audioeq, DEFAULT_CUSTOM_EQ_NUM);
 }
 /* equalizer implementation */
 
@@ -307,13 +307,13 @@ typedef struct _GstIirEqualizerBandClass GstIirEqualizerBandClass;
 #define GST_TYPE_IIR_EQUALIZER_BAND \
   (gst_iir_equalizer_band_get_type())
 #define GST_IIR_EQUALIZER_BAND(obj) \
-  (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_IIR_EQUALIZER_BAND,GstIirEqualizerBand))
+  (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_IIR_EQUALIZER_BAND, GstIirEqualizerBand))
 #define GST_IIR_EQUALIZER_BAND_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_IIR_EQUALIZER_BAND,GstIirEqualizerBandClass))
+  (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_IIR_EQUALIZER_BAND, GstIirEqualizerBandClass))
 #define GST_IS_IIR_EQUALIZER_BAND(obj) \
-  (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_IIR_EQUALIZER_BAND))
+  (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_IIR_EQUALIZER_BAND))
 #define GST_IS_IIR_EQUALIZER_BAND_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_IIR_EQUALIZER_BAND))
+  (G_TYPE_CHECK_CLASS_TYPE((klass), GST_TYPE_IIR_EQUALIZER_BAND))
 
 struct _GstIirEqualizerBand
 {
@@ -1026,8 +1026,8 @@ guint size, guint channels)                                             \
 }
 
 CREATE_OPTIMIZED_FUNCTIONS_INT (gint16, gfloat, -32768.0, 32767.0);
-CREATE_OPTIMIZED_FUNCTIONS (gfloat);
-CREATE_OPTIMIZED_FUNCTIONS (gdouble);
+/* CREATE_OPTIMIZED_FUNCTIONS (gfloat); */
+/* CREATE_OPTIMIZED_FUNCTIONS (gdouble); */
 
 #ifdef AUDIOEQ_REDUCE_MEMCPY
 static GstFlowReturn

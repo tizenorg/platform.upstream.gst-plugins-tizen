@@ -63,7 +63,7 @@ GST_DEBUG_CATEGORY_STATIC(gst_audiotp_debug);
 
 G_DEFINE_TYPE_WITH_CODE(Gstaudiotp, gst_audiotp, GST_TYPE_ELEMENT, _do_init(G_TYPE_INVALID));
 
-static void gst_audiotp_base_init(gpointer klass);
+//static void gst_audiotp_base_init(gpointer klass);
 static void gst_audiotp_class_init(GstaudiotpClass *klass);
 static void gst_audiotp_init(Gstaudiotp *dec);
 static GstFlowReturn gst_audiotp_chain(GstPad *pad, GstObject *parent, GstBuffer *buf);
