@@ -39,40 +39,40 @@ GST_DEBUG_CATEGORY_STATIC (gst_audioeq_debug);
 /* Filter signals and args */
 enum
 {
-	/* FILL ME */
-	LAST_SIGNAL
+  /* FILL ME */
+  LAST_SIGNAL
 };
 
 enum
 {
-	PROP_0,
-	PROP_FILTER_ACTION,
-	PROP_CUSTOM_EQ,
-	PROP_CUSTOM_EQ_NUM,
-	PROP_CUSTOM_EQ_FREQ,
-	PROP_CUSTOM_EQ_WIDTH,
+  PROP_0,
+  PROP_FILTER_ACTION,
+  PROP_CUSTOM_EQ,
+  PROP_CUSTOM_EQ_NUM,
+  PROP_CUSTOM_EQ_FREQ,
+  PROP_CUSTOM_EQ_WIDTH,
 };
 
 enum FilterActionType
 {
-	FILTER_NONE,
-	FILTER_PRESET,
-	FILTER_ADVANCED_SETTING
+  FILTER_NONE,
+  FILTER_PRESET,
+  FILTER_ADVANCED_SETTING
 };
 
 enum SampleRate
 {
-	SAMPLERATE_48000Hz,
-	SAMPLERATE_44100Hz,
-	SAMPLERATE_32000Hz,
-	SAMPLERATE_24000Hz,
-	SAMPLERATE_22050Hz,
-	SAMPLERATE_16000Hz,
-	SAMPLERATE_12000Hz,
-	SAMPLERATE_11025Hz,
-	SAMPLERATE_8000Hz,
+  SAMPLERATE_48000Hz,
+  SAMPLERATE_44100Hz,
+  SAMPLERATE_32000Hz,
+  SAMPLERATE_24000Hz,
+  SAMPLERATE_22050Hz,
+  SAMPLERATE_16000Hz,
+  SAMPLERATE_12000Hz,
+  SAMPLERATE_11025Hz,
+  SAMPLERATE_8000Hz,
 
-	SAMPLERATE_NUM
+  SAMPLERATE_NUM
 };
 
 #define DEFAULT_SAMPLE_SIZE			2
@@ -84,28 +84,28 @@ enum SampleRate
 #define DEFAULT_CUSTOM_EQ_NUM 		7
 
 static GstStaticPadTemplate sinktemplate =
-	GST_STATIC_PAD_TEMPLATE(
-		"sink",
-		GST_PAD_SINK,
-		GST_PAD_ALWAYS,
-		GST_STATIC_CAPS (
-			"audio/x-raw, "
-		    "format = (string) " GST_AUDIO_NE(S16) ", "
-			"channels = (int) [1,2]"
-			)
-	);
+  GST_STATIC_PAD_TEMPLATE(
+    "sink",
+    GST_PAD_SINK,
+    GST_PAD_ALWAYS,
+    GST_STATIC_CAPS (
+      "audio/x-raw, "
+      "format = (string) " GST_AUDIO_NE(S16) ", "
+      "channels = (int) [1,2]"
+    )
+  );
 
 static GstStaticPadTemplate srctemplate =
-	GST_STATIC_PAD_TEMPLATE(
-		"src",
-		GST_PAD_SRC,
-		GST_PAD_ALWAYS,
-		GST_STATIC_CAPS (
-			"audio/x-raw, "
-		    "format = (string) " GST_AUDIO_NE(S16) ", "
-			"channels = (int) [1,2]"
-			)
-	);
+  GST_STATIC_PAD_TEMPLATE(
+    "src",
+    GST_PAD_SRC,
+    GST_PAD_ALWAYS,
+    GST_STATIC_CAPS (
+      "audio/x-raw, "
+      "format = (string) " GST_AUDIO_NE(S16) ", "
+      "channels = (int) [1,2]"
+    )
+  );
 
 static void gst_iir_equalizer_child_proxy_interface_init (gpointer g_iface,
     gpointer iface_data);
@@ -128,30 +128,30 @@ static GstStateChangeReturn
 gst_audioeq_change_state (GstElement * element, GstStateChange transition)
 {
   GST_DEBUG ("gst_audioeq_change_state");
-	GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
-	Gstaudioeq *audioeq = GST_AUDIOEQ (element);
+  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+  Gstaudioeq *audioeq = GST_AUDIOEQ (element);
 
-	switch (transition) {
-	case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
-		audioeq->need_update_filter = TRUE;
-		break;
-	default:
-		break;
-	}
+  switch (transition) {
+  case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
+    audioeq->need_update_filter = TRUE;
+    break;
+  default:
+    break;
+  }
 
-	ret = GST_ELEMENT_CLASS (gst_audioeq_parent_class)->change_state (element, transition);
+  ret = GST_ELEMENT_CLASS (gst_audioeq_parent_class)->change_state (element, transition);
 
-	if (ret == GST_STATE_CHANGE_FAILURE)
-		return ret;
+  if (ret == GST_STATE_CHANGE_FAILURE)
+    return ret;
 
-	switch (transition) {
-	case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
-		break;
-	default:
-		break;
-	}
+  switch (transition) {
+  case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
+    break;
+  default:
+    break;
+  }
 
-	return ret;
+  return ret;
 }
 
 #if 0
@@ -166,73 +166,73 @@ gst_audioeq_base_init (gpointer gclass)
 static void
 gst_audioeq_class_init (GstaudioeqClass * klass)
 {
-       GST_DEBUG ("gst_audioeq_class_init");
-	GObjectClass *gobject_class;
-	GstElementClass *gstelement_class;
-	GstBaseTransformClass *basetransform_class;
+  GST_DEBUG ("gst_audioeq_class_init");
+  GObjectClass *gobject_class;
+  GstElementClass *gstelement_class;
+  GstBaseTransformClass *basetransform_class;
 
-	gobject_class = G_OBJECT_CLASS (klass);
-	gstelement_class = GST_ELEMENT_CLASS (klass);
-	basetransform_class = GST_BASE_TRANSFORM_CLASS(klass);
+  gobject_class = G_OBJECT_CLASS (klass);
+  gstelement_class = GST_ELEMENT_CLASS (klass);
+  basetransform_class = GST_BASE_TRANSFORM_CLASS(klass);
 
-	gobject_class->set_property = GST_DEBUG_FUNCPTR(gst_audioeq_set_property);
-	gobject_class->get_property = GST_DEBUG_FUNCPTR(gst_audioeq_get_property);
+  gobject_class->set_property = GST_DEBUG_FUNCPTR(gst_audioeq_set_property);
+  gobject_class->get_property = GST_DEBUG_FUNCPTR(gst_audioeq_get_property);
 
-	gst_element_class_add_pad_template(gstelement_class,
-		gst_static_pad_template_get (&srctemplate));
-	gst_element_class_add_pad_template(gstelement_class,
-		gst_static_pad_template_get (&sinktemplate));
+  gst_element_class_add_pad_template(gstelement_class,
+  gst_static_pad_template_get (&srctemplate));
+  gst_element_class_add_pad_template(gstelement_class,
+  gst_static_pad_template_get (&sinktemplate));
 
-	gst_element_class_set_static_metadata(gstelement_class,
-	        "Audio Equalizer",
-	        "Filter/Effect/Audio",
-	        "Set equalisation effect on audio/raw streams",
-	        "Samsung Electronics <www.samsung.com>");
-	gstelement_class->change_state = GST_DEBUG_FUNCPTR(gst_audioeq_change_state);
+  gst_element_class_set_static_metadata(gstelement_class,
+    "Audio Equalizer",
+    "Filter/Effect/Audio",
+    "Set equalisation effect on audio/raw streams",
+    "Samsung Electronics <www.samsung.com>");
+  gstelement_class->change_state = GST_DEBUG_FUNCPTR(gst_audioeq_change_state);
 
-	g_object_class_install_property(gobject_class, PROP_FILTER_ACTION,
-		g_param_spec_uint("filter-action", "filter action", "(0)none (1)preset (2)advanced setting",
-		0, 2, DEFAULT_FILTER_ACTION, G_PARAM_READWRITE));
+  g_object_class_install_property(gobject_class, PROP_FILTER_ACTION,
+    g_param_spec_uint("filter-action", "filter action", "(0)none (1)preset (2)advanced setting",
+      0, 2, DEFAULT_FILTER_ACTION, G_PARAM_READWRITE));
 
-	g_object_class_install_property (gobject_class, PROP_CUSTOM_EQ,
-		g_param_spec_pointer("custom-eq", "custom eq",
-		"pointer for 9 bands of EQ array", G_PARAM_READWRITE));
+  g_object_class_install_property (gobject_class, PROP_CUSTOM_EQ,
+    g_param_spec_pointer("custom-eq", "custom eq",
+      "pointer for 9 bands of EQ array", G_PARAM_READWRITE));
 
-	g_object_class_install_property(gobject_class, PROP_CUSTOM_EQ_NUM,
-		g_param_spec_uint("custom-eq-num", "custom eq num", "number of custom EQ bands",
-		0, 9, DEFAULT_CUSTOM_EQ_NUM, G_PARAM_READABLE));
+  g_object_class_install_property(gobject_class, PROP_CUSTOM_EQ_NUM,
+    g_param_spec_uint("custom-eq-num", "custom eq num", "number of custom EQ bands",
+      0, 9, DEFAULT_CUSTOM_EQ_NUM, G_PARAM_READABLE));
 
-	g_object_class_install_property(gobject_class, PROP_CUSTOM_EQ_FREQ,
-		g_param_spec_pointer("custom-eq-freq", "custom eq freq", "pointer for EQ bands central frequency(Hz) array",
-		G_PARAM_READABLE));
+  g_object_class_install_property(gobject_class, PROP_CUSTOM_EQ_FREQ,
+    g_param_spec_pointer("custom-eq-freq", "custom eq freq", "pointer for EQ bands central frequency(Hz) array",
+      G_PARAM_READABLE));
 
-	g_object_class_install_property(gobject_class, PROP_CUSTOM_EQ_WIDTH,
-		g_param_spec_pointer("custom-eq-width", "custom eq width", "pointer for EQ bands width(Hz) array",
-		G_PARAM_READABLE));
+  g_object_class_install_property(gobject_class, PROP_CUSTOM_EQ_WIDTH,
+    g_param_spec_pointer("custom-eq-width", "custom eq width", "pointer for EQ bands width(Hz) array",
+      G_PARAM_READABLE));
 
-	gobject_class->finalize = GST_DEBUG_FUNCPTR(gst_iir_equalizer_finalize);
+  gobject_class->finalize = GST_DEBUG_FUNCPTR(gst_iir_equalizer_finalize);
 
 /* It is possible to reduce memcpy by setting output same as input of AudioEq_InOutConfig */
 #ifdef AUDIOEQ_REDUCE_MEMCPY
-	basetransform_class->transform_ip = GST_DEBUG_FUNCPTR(gst_audioeq_transform_ip);
+  basetransform_class->transform_ip = GST_DEBUG_FUNCPTR(gst_audioeq_transform_ip);
 #endif
-	basetransform_class->set_caps = GST_DEBUG_FUNCPTR(gst_audioeq_set_caps);
+  basetransform_class->set_caps = GST_DEBUG_FUNCPTR(gst_audioeq_set_caps);
 }
 
 static void
 gst_audioeq_init (Gstaudioeq * audioeq)
 {
   GST_DEBUG ("gst_audioeq_init");
-	audioeq->samplerate = DEFAULT_SAMPLE_RATE;
-	audioeq->channels = DEAFULT_CHANNELS;
+  audioeq->samplerate = DEFAULT_SAMPLE_RATE;
+  audioeq->channels = DEAFULT_CHANNELS;
 
-	audioeq->filter_action = DEFAULT_FILTER_ACTION;
-	memset(audioeq->custom_eq, 0x00, sizeof(gint) * CUSTOM_EQ_BAND_MAX);
-	audioeq->need_update_filter = TRUE;
+  audioeq->filter_action = DEFAULT_FILTER_ACTION;
+  memset(audioeq->custom_eq, 0x00, sizeof(gint) * CUSTOM_EQ_BAND_MAX);
+  audioeq->need_update_filter = TRUE;
 
-	g_mutex_init(&audioeq->equ.bands_lock);
-	audioeq->equ.need_new_coefficients = TRUE;
-	gst_iir_equalizer_compute_frequencies (audioeq, DEFAULT_CUSTOM_EQ_NUM);
+  g_mutex_init(&audioeq->equ.bands_lock);
+  audioeq->equ.need_new_coefficients = TRUE;
+  gst_iir_equalizer_compute_frequencies (audioeq, DEFAULT_CUSTOM_EQ_NUM);
 }
 /* equalizer implementation */
 
@@ -307,13 +307,13 @@ typedef struct _GstIirEqualizerBandClass GstIirEqualizerBandClass;
 #define GST_TYPE_IIR_EQUALIZER_BAND \
   (gst_iir_equalizer_band_get_type())
 #define GST_IIR_EQUALIZER_BAND(obj) \
-  (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_IIR_EQUALIZER_BAND,GstIirEqualizerBand))
+  (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_IIR_EQUALIZER_BAND, GstIirEqualizerBand))
 #define GST_IIR_EQUALIZER_BAND_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_IIR_EQUALIZER_BAND,GstIirEqualizerBandClass))
+  (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_IIR_EQUALIZER_BAND, GstIirEqualizerBandClass))
 #define GST_IS_IIR_EQUALIZER_BAND(obj) \
-  (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_IIR_EQUALIZER_BAND))
+  (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_IIR_EQUALIZER_BAND))
 #define GST_IS_IIR_EQUALIZER_BAND_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_IIR_EQUALIZER_BAND))
+  (G_TYPE_CHECK_CLASS_TYPE((klass), GST_TYPE_IIR_EQUALIZER_BAND))
 
 struct _GstIirEqualizerBand
 {
@@ -1026,8 +1026,8 @@ guint size, guint channels)                                             \
 }
 
 CREATE_OPTIMIZED_FUNCTIONS_INT (gint16, gfloat, -32768.0, 32767.0);
-CREATE_OPTIMIZED_FUNCTIONS (gfloat);
-CREATE_OPTIMIZED_FUNCTIONS (gdouble);
+/* CREATE_OPTIMIZED_FUNCTIONS (gfloat); */
+/* CREATE_OPTIMIZED_FUNCTIONS (gdouble); */
 
 #ifdef AUDIOEQ_REDUCE_MEMCPY
 static GstFlowReturn
@@ -1083,160 +1083,159 @@ gst_audioeq_transform_ip (GstBaseTransform * base, GstBuffer * buf)
 #endif
 
 static gboolean
-gst_audioeq_set_caps (GstBaseTransform * base, GstCaps * incaps,
-	GstCaps * outcaps)
+gst_audioeq_set_caps (GstBaseTransform * base, GstCaps * incaps, GstCaps * outcaps)
 {
   GST_DEBUG ("gst_audioeq_set_caps");
-	Gstaudioeq *audioeq = GST_AUDIOEQ(base);
-	GstStructure *ins;
-	GstPad *pad;
-	gint samplerate;
-	gint channels;
-	gshort old_samplerate;
-	gshort old_channels;
+  Gstaudioeq *audioeq = GST_AUDIOEQ(base);
+  GstStructure *ins;
+  GstPad *pad;
+  gint samplerate;
+  gint channels;
+  gshort old_samplerate;
+  gshort old_channels;
 
-	pad = gst_element_get_static_pad(GST_ELEMENT(audioeq), "src");
+  pad = gst_element_get_static_pad(GST_ELEMENT(audioeq), "src");
 
-	/* forward-negotiate */
-	if(!gst_pad_set_caps(pad, incaps)) {
-		gst_object_unref(pad);
-		return FALSE;
-	}
+  /* forward-negotiate */
+  if(!gst_pad_set_caps(pad, incaps)) {
+    gst_object_unref(pad);
+    return FALSE;
+  }
 
-	/* negotiation succeeded, so now configure ourselves */
-	ins = gst_caps_get_structure(incaps, 0);
+  /* negotiation succeeded, so now configure ourselves */
+  ins = gst_caps_get_structure(incaps, 0);
 
-	/* get samplerate from caps & convert */
-	old_samplerate = audioeq->samplerate;
-	old_channels = audioeq->channels;
-	gst_structure_get_int(ins, "rate", &samplerate);
-	switch (samplerate) {
-	case 48000:
-		audioeq->samplerate = SAMPLERATE_48000Hz;
-		break;
-	case 44100:
-		audioeq->samplerate = SAMPLERATE_44100Hz;
-		break;
-	case 32000:
-		audioeq->samplerate = SAMPLERATE_32000Hz;
-		break;
-	case 24000:
-		audioeq->samplerate = SAMPLERATE_24000Hz;
-		break;
-	case 22050:
-		audioeq->samplerate = SAMPLERATE_22050Hz;
-		break;
-	case 16000:
-		audioeq->samplerate = SAMPLERATE_16000Hz;
-		break;
-	case 12000:
-		audioeq->samplerate = SAMPLERATE_12000Hz;
-		break;
-	case 11025:
-		audioeq->samplerate = SAMPLERATE_11025Hz;
-		break;
-	case 8000:
-		audioeq->samplerate = SAMPLERATE_8000Hz;
-		break;
-	default:
-		if (samplerate < 8000) {
-			audioeq->samplerate = SAMPLERATE_8000Hz;
-		} else if (samplerate > 48000) {
-			audioeq->samplerate = SAMPLERATE_48000Hz;
-		}
-		break;
-	}
-	/* get number of channels from caps */
-	gst_structure_get_int(ins, "channels", &channels);
-	audioeq->channels = (gshort)channels;
+  /* get samplerate from caps & convert */
+  old_samplerate = audioeq->samplerate;
+  old_channels = audioeq->channels;
+  gst_structure_get_int(ins, "rate", &samplerate);
+  switch (samplerate) {
+  case 48000:
+  audioeq->samplerate = SAMPLERATE_48000Hz;
+    break;
+  case 44100:
+    audioeq->samplerate = SAMPLERATE_44100Hz;
+    break;
+  case 32000:
+    audioeq->samplerate = SAMPLERATE_32000Hz;
+    break;
+  case 24000:
+    audioeq->samplerate = SAMPLERATE_24000Hz;
+    break;
+  case 22050:
+    audioeq->samplerate = SAMPLERATE_22050Hz;
+    break;
+  case 16000:
+    audioeq->samplerate = SAMPLERATE_16000Hz;
+    break;
+  case 12000:
+    audioeq->samplerate = SAMPLERATE_12000Hz;
+    break;
+  case 11025:
+    audioeq->samplerate = SAMPLERATE_11025Hz;
+    break;
+  case 8000:
+    audioeq->samplerate = SAMPLERATE_8000Hz;
+    break;
+  default:
+    if (samplerate < 8000) {
+      audioeq->samplerate = SAMPLERATE_8000Hz;
+    } else if (samplerate > 48000) {
+      audioeq->samplerate = SAMPLERATE_48000Hz;
+    }
+    break;
+  }
+  /* get number of channels from caps */
+  gst_structure_get_int(ins, "channels", &channels);
+  audioeq->channels = (gshort)channels;
 
-	if ((old_samplerate != audioeq->samplerate)
-		|| (old_channels != audioeq->channels)) {
-		audioeq->need_update_filter = TRUE;
-	}
+  if ((old_samplerate != audioeq->samplerate)
+    || (old_channels != audioeq->channels)) {
+    audioeq->need_update_filter = TRUE;
+  }
 
-	gst_object_unref (pad);
+  gst_object_unref (pad);
 
-	return TRUE;
+  return TRUE;
 }
 
 static void
 gst_audioeq_set_property (GObject * object, guint prop_id,
-	const GValue * value, GParamSpec * pspec)
+    const GValue * value, GParamSpec * pspec)
 {
-	GST_DEBUG ("gst_audioeq_set_property");
-	Gstaudioeq *audioeq = GST_AUDIOEQ (object);
-	GstIirEqualizer *equ = &audioeq->equ;
-	gshort *pointer;
+  GST_DEBUG ("gst_audioeq_set_property");
+  Gstaudioeq *audioeq = GST_AUDIOEQ (object);
+  GstIirEqualizer *equ = &audioeq->equ;
+  gshort *pointer;
 
-	switch (prop_id) {
+  switch (prop_id) {
 
-	case PROP_FILTER_ACTION:
-		audioeq->filter_action = g_value_get_uint(value);
-		BANDS_LOCK(equ);
-		equ->need_new_coefficients = TRUE;
-		BANDS_UNLOCK(equ);
-		break;
+  case PROP_FILTER_ACTION:
+    audioeq->filter_action = g_value_get_uint(value);
+    BANDS_LOCK(equ);
+    equ->need_new_coefficients = TRUE;
+    BANDS_UNLOCK(equ);
+    break;
 
-	case PROP_CUSTOM_EQ:
-		pointer = g_value_get_pointer(value);
-		if (pointer) {
-			memcpy(audioeq->custom_eq, pointer, sizeof(gint) * CUSTOM_EQ_BAND_MAX);
-			if (audioeq->filter_action == FILTER_ADVANCED_SETTING) {
-				BANDS_LOCK(equ);
-				equ->need_new_coefficients = TRUE;
-				gst_audioeq_band_set_property(audioeq);
-				BANDS_UNLOCK(equ);
-			}
-		}
-		break;
+  case PROP_CUSTOM_EQ:
+    pointer = g_value_get_pointer(value);
+    if (pointer) {
+      memcpy(audioeq->custom_eq, pointer, sizeof(gint) * CUSTOM_EQ_BAND_MAX);
+      if (audioeq->filter_action == FILTER_ADVANCED_SETTING) {
+        BANDS_LOCK(equ);
+        equ->need_new_coefficients = TRUE;
+        gst_audioeq_band_set_property(audioeq);
+        BANDS_UNLOCK(equ);
+      }
+    }
+    break;
 
-	default:
-		break;
-	}
-	GST_DEBUG ("gst_audioeq_set_property need_update_filter %d", audioeq->need_update_filter);
+  default:
+    break;
+  }
+  GST_DEBUG ("gst_audioeq_set_property need_update_filter %d", audioeq->need_update_filter);
 }
 
 static void
 gst_audioeq_get_property (GObject * object, guint prop_id, GValue * value, GParamSpec * pspec)
 {
-GST_DEBUG ("gst_audioeq_get_property");
+  GST_DEBUG ("gst_audioeq_get_property");
 
-	Gstaudioeq *audioeq = GST_AUDIOEQ (object);
-	GstIirEqualizer *equ = &audioeq->equ;
-	gshort i;
-	gdouble widtharr[DEFAULT_CUSTOM_EQ_NUM],freqarr[DEFAULT_CUSTOM_EQ_NUM];
+  Gstaudioeq *audioeq = GST_AUDIOEQ (object);
+  GstIirEqualizer *equ = &audioeq->equ;
+  gshort i;
+  gdouble widtharr[DEFAULT_CUSTOM_EQ_NUM],freqarr[DEFAULT_CUSTOM_EQ_NUM];
 
-	switch (prop_id) {
-	case PROP_FILTER_ACTION:
-		g_value_set_uint(value, audioeq->filter_action);
-		break;
+  switch (prop_id) {
+  case PROP_FILTER_ACTION:
+    g_value_set_uint(value, audioeq->filter_action);
+    break;
 
-	case PROP_CUSTOM_EQ:
-		g_value_set_pointer(value, audioeq->custom_eq);
-		break;
+  case PROP_CUSTOM_EQ:
+    g_value_set_pointer(value, audioeq->custom_eq);
+    break;
 
-	case PROP_CUSTOM_EQ_NUM:
-		g_value_set_uint(value, DEFAULT_CUSTOM_EQ_NUM);
-		break;
+  case PROP_CUSTOM_EQ_NUM:
+    g_value_set_uint(value, DEFAULT_CUSTOM_EQ_NUM);
+    break;
 
-	case PROP_CUSTOM_EQ_FREQ:
-		for(i=0;i<DEFAULT_CUSTOM_EQ_NUM;i++) {
-			 freqarr[i] =	equ->bands[i]->freq;
-		}
-		g_value_set_pointer(value, &freqarr);
-		break;
+  case PROP_CUSTOM_EQ_FREQ:
+    for(i=0;i<DEFAULT_CUSTOM_EQ_NUM;i++) {
+      freqarr[i] =	equ->bands[i]->freq;
+    }
+    g_value_set_pointer(value, &freqarr);
+    break;
 
-	case PROP_CUSTOM_EQ_WIDTH:
-		for(i=0;i<DEFAULT_CUSTOM_EQ_NUM;i++) {
-			 widtharr[i] =	equ->bands[i]->width;
-		}
-		g_value_set_pointer(value, &widtharr);
-		break;
+  case PROP_CUSTOM_EQ_WIDTH:
+    for(i=0;i<DEFAULT_CUSTOM_EQ_NUM;i++) {
+      widtharr[i] =	equ->bands[i]->width;
+    }
+    g_value_set_pointer(value, &widtharr);
+    break;
 
-	default:
-		break;
-	}
+  default:
+    break;
+  }
 }
 
 #if 0
@@ -1277,18 +1276,18 @@ GST_DEBUG ("gst_iir_equalizer_setup");
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
-    GST_DEBUG_CATEGORY_INIT(gst_audioeq_debug, "audioeq", 0, "Audio Equalizer Plugin");
-       GST_DEBUG ("audioeq plugin_init ");
-	return gst_element_register(plugin, "audioeq", GST_RANK_NONE, GST_TYPE_AUDIOEQ);
+  GST_DEBUG_CATEGORY_INIT(gst_audioeq_debug, "audioeq", 0, "Audio Equalizer Plugin");
+  GST_DEBUG ("audioeq plugin_init ");
+  return gst_element_register(plugin, "audioeq", GST_RANK_NONE, GST_TYPE_AUDIOEQ);
 }
 
 
 GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
-	GST_VERSION_MINOR,
-	audioeq,
-	"Audio Equalizer Plugin",
-	plugin_init,
-	VERSION,
-	"LGPL",
-	"gst-plugins-ext",
-	"https://www.tizen.org/")
+  GST_VERSION_MINOR,
+  audioeq,
+  "Audio Equalizer Plugin",
+  plugin_init,
+  VERSION,
+  "LGPL",
+  "gst-plugins-ext",
+  "https://www.tizen.org/")
