@@ -231,6 +231,8 @@ struct _GstWFDBaseSrcPrivate
   guint audio_channels;
   guint audio_bitwidth;
   guint audio_frequency;
+
+  gboolean direct_streaming_mode;
 };
 
 /* object */
@@ -1493,6 +1495,114 @@ gst_wfd_base_src_handle_request (GstWFDBaseSrc * src, GstRTSPMessage * request)
         }
       }
 
+      /* Note : wfd2-audio-codecs :
+       *    The wfd2-audio-codecs parameter specifies the audio formats supported in the WFD session.
+       *    Valid audio codecs are LPCM, AAC, AC3.
+       *    Primary sink should support one of audio codecs.
+       */
+      if(wfd_msg->direct_audio_codecs) {
+        guint audio_codec = 0;
+        guint audio_sampling_frequency = 0;
+        guint audio_channels = 0;
+        guint audio_latency = 0;
+
+        if(priv->audio_param != NULL) {
+          GstStructure *audio_param = priv->audio_param;
+          if (gst_structure_has_field (audio_param, "audio_codec"))
+            gst_structure_get_uint (audio_param, "audio_codec", &audio_codec);
+          if (gst_structure_has_field (audio_param, "audio_latency"))
+            gst_structure_get_uint (audio_param, "audio_latency", &audio_latency);
+          if (gst_structure_has_field (audio_param, "audio_channels"))
+            gst_structure_get_uint (audio_param, "audio_channels", &audio_channels);
+          if (gst_structure_has_field (audio_param, "audio_sampling_frequency"))
+            gst_structure_get_uint (audio_param, "audio_sampling_frequency", &audio_sampling_frequency);
+        }
+
+        wfd_res = gst_wfd_message_set_supported_direct_audio_format (wfd_msg,
+          audio_codec,
+          audio_sampling_frequency,
+          audio_channels,
+          16,
+          audio_latency);
+        if (wfd_res != GST_WFD_OK) {
+          GST_ERROR ("gst_wfd_message_set_supported_direct_audio_format is failed");
+          goto message_config_error;
+        }
+      }
+
+      /* Note : wfd2-video-formats :
+       *    The wfd2-video-formats parameter specifies the supported video resolutions,
+       *    H.644 codec profile, level, decoder latency,  minimum slice size, slice encoding parameters
+       *      and support for video frame rate control (including explicit frame rate change and implicit video frame skipping.
+       */
+      if(wfd_msg->direct_video_formats) {
+        guint video_codec = 0;
+        guint video_native_resolution = 0;
+        guint video_cea_support = 0;
+        guint video_vesa_support = 0;
+        guint video_hh_support = 0;
+        guint video_profile = 0;
+        guint video_level = 0;
+        guint video_latency = 0;
+        gint video_vertical_resolution = 0;
+        gint video_horizontal_resolution = 0;
+        gint video_minimum_slicing = 0;
+        gint video_slice_enc_param = 0;
+        gint video_framerate_control_support = 0;
+
+        if (priv->video_param != NULL) {
+          GstStructure *video_param = priv->video_param;
+
+          if (gst_structure_has_field (video_param, "video_codec"))
+            gst_structure_get_uint (video_param, "video_codec", &video_codec);
+          if (gst_structure_has_field (video_param, "video_native_resolution"))
+            gst_structure_get_uint (video_param, "video_native_resolution", &video_native_resolution);
+          if (gst_structure_has_field (video_param, "video_cea_support"))
+            gst_structure_get_uint (video_param, "video_cea_support", &video_cea_support);
+          if (gst_structure_has_field (video_param, "video_vesa_support"))
+            gst_structure_get_uint (video_param, "video_vesa_support", &video_vesa_support);
+          if (gst_structure_has_field (video_param, "video_hh_support"))
+            gst_structure_get_uint (video_param, "video_hh_support", &video_hh_support);
+          if (gst_structure_has_field (video_param, "video_profile"))
+            gst_structure_get_uint (video_param, "video_profile", &video_profile);
+          if (gst_structure_has_field (video_param, "video_level"))
+            gst_structure_get_uint (video_param, "video_level", &video_level);
+          if (gst_structure_has_field (video_param, "video_latency"))
+            gst_structure_get_uint (video_param, "video_latency", &video_latency);
+          if (gst_structure_has_field (video_param, "video_vertical_resolution"))
+            gst_structure_get_int (video_param, "video_vertical_resolution", &video_vertical_resolution);
+          if (gst_structure_has_field (video_param, "video_horizontal_resolution"))
+            gst_structure_get_int (video_param, "video_horizontal_resolution", &video_horizontal_resolution);
+          if (gst_structure_has_field (video_param, "video_minimum_slicing"))
+            gst_structure_get_int (video_param, "video_minimum_slicing", &video_minimum_slicing);
+          if (gst_structure_has_field (video_param, "video_slice_enc_param"))
+            gst_structure_get_int (video_param, "video_slice_enc_param", &video_slice_enc_param);
+          if (gst_structure_has_field (video_param, "video_framerate_control_support"))
+            gst_structure_get_int (video_param, "video_framerate_control_support", &video_framerate_control_support);
+        }
+
+        wfd_res = gst_wfd_message_set_supported_direct_video_format (wfd_msg,
+            video_codec,
+            GST_WFD_VIDEO_CEA_RESOLUTION,
+            video_native_resolution,
+            video_cea_support,
+            video_vesa_support,
+            video_hh_support,
+            video_profile,
+            video_level,
+            video_latency,
+            video_vertical_resolution,
+            video_horizontal_resolution,
+            video_minimum_slicing,
+            video_slice_enc_param,
+            video_framerate_control_support,
+            GST_WFD_PREFERRED_DISPLAY_MODE_NOT_SUPPORTED);
+        if (wfd_res != GST_WFD_OK) {
+          GST_ERROR ("gst_wfd_message_set_supported_direct_video_format is failed");
+          goto message_config_error;
+        }
+      }
+
       /* Note : wfd-3d-formats :
        *    The wfd-3d-formats parameter specifies the support for stereoscopic video capabilities.
        */
@@ -1699,6 +1809,8 @@ gst_wfd_base_src_handle_request (GstWFDBaseSrc * src, GstRTSPMessage * request)
       if (wfd_msg->audio_codecs || wfd_msg->video_formats || wfd_msg->video_3d_formats) {
         GstStructure *stream_info = gst_structure_new ("WFDStreamInfo", NULL, NULL);
 
+        priv->direct_streaming_mode = FALSE;
+
         if(wfd_msg->audio_codecs) {
           res = gst_wfd_base_src_get_audio_parameter(src, wfd_msg);
           if(res != GST_RTSP_OK) {
@@ -1730,6 +1842,42 @@ gst_wfd_base_src_handle_request (GstWFDBaseSrc * src, GstRTSPMessage * request)
         if(wfd_msg->video_3d_formats) {
         /* TO DO */
         }
+        g_signal_emit (src, gst_wfd_base_src_signals[SIGNAL_UPDATE_MEDIA_INFO], 0, stream_info);
+      }
+
+      if (wfd_msg->direct_audio_codecs && wfd_msg->direct_video_formats && wfd_msg->direct_mode) {
+        GstStructure *stream_info = gst_structure_new ("WFDStreamInfo", NULL, NULL);
+
+        priv->direct_streaming_mode = TRUE;
+
+        if(wfd_msg->direct_audio_codecs) {
+          res = gst_wfd_base_src_get_audio_parameter(src, wfd_msg);
+          if(res != GST_RTSP_OK) {
+            goto message_config_error;
+          }
+
+          gst_structure_set (stream_info,
+              "audio_format", G_TYPE_STRING, priv->audio_format,
+              "audio_channels", G_TYPE_INT, priv->audio_channels,
+              "audio_rate", G_TYPE_INT, priv->audio_frequency,
+              "audio_bitwidth", G_TYPE_INT, priv->audio_bitwidth/16,
+              NULL);
+        }
+
+        if(wfd_msg->direct_video_formats) {
+          res = gst_wfd_base_src_get_video_parameter(src, wfd_msg);
+          if(res != GST_RTSP_OK) {
+            goto message_config_error;
+          }
+
+          gst_structure_set (stream_info,
+              "video_format", G_TYPE_STRING, "H264",
+              "video_width", G_TYPE_INT, priv->video_width,
+              "video_height", G_TYPE_INT, priv->video_height,
+              "video_framerate", G_TYPE_INT, priv->video_framerate,
+              NULL);
+        }
+
         g_signal_emit (src, gst_wfd_base_src_signals[SIGNAL_UPDATE_MEDIA_INFO], 0, stream_info);
       }
 
@@ -3934,13 +4082,19 @@ gst_wfd_base_src_get_audio_parameter(GstWFDBaseSrc * src, GstWFDMessage * msg)
   guint32 audio_latency = 0;
   GstWFDResult wfd_res = GST_WFD_OK;
 
-  wfd_res = gst_wfd_message_get_prefered_audio_format (msg, &audio_format, &audio_frequency, &audio_channels, &audio_bitwidth, &audio_latency);
+  if (priv->direct_streaming_mode) {
+    wfd_res = gst_wfd_message_get_preferred_direct_audio_format (msg, &audio_format, &audio_frequency, &audio_channels, &audio_bitwidth, &audio_latency);
+    priv->audio_format = g_strdup(msg->direct_audio_codecs->list->audio_format);
+  }
+  else {
+    wfd_res = gst_wfd_message_get_prefered_audio_format (msg, &audio_format, &audio_frequency, &audio_channels, &audio_bitwidth, &audio_latency);
+    priv->audio_format = g_strdup(msg->audio_codecs->list->audio_format);
+  }
   if(wfd_res != GST_WFD_OK) {
     GST_ERROR("Failed to get prefered audio format.");
     return GST_RTSP_ERROR;
   }
 
-  priv->audio_format = g_strdup(msg->audio_codecs->list->audio_format);
   if(audio_frequency == GST_WFD_FREQ_48000)
     audio_frequency = 48000;
   else if(audio_frequency == GST_WFD_FREQ_44100)
@@ -3981,10 +4135,18 @@ gst_wfd_base_src_get_video_parameter(GstWFDBaseSrc * src, GstWFDMessage * msg)
   guint cvLatency = 0;
   GstWFDResult wfd_res = GST_WFD_OK;
 
-  wfd_res = gst_wfd_message_get_prefered_video_format (msg, &cvCodec, &cNative, &cNativeResolution,
+  if (src->priv->direct_streaming_mode) {
+    wfd_res = gst_wfd_message_get_preferred_direct_video_format (msg, &cvCodec, &cNative, &cNativeResolution,
       &cCEAResolution, &cVESAResolution, &cHHResolution,
       &cProfile, &cLevel, &cvLatency, &cMaxHeight,
       &cMaxWidth, &cmin_slice_size, &cslice_enc_params, &cframe_rate_control);
+  }
+  else {
+    wfd_res = gst_wfd_message_get_prefered_video_format (msg, &cvCodec, &cNative, &cNativeResolution,
+      &cCEAResolution, &cVESAResolution, &cHHResolution,
+      &cProfile, &cLevel, &cvLatency, &cMaxHeight,
+      &cMaxWidth, &cmin_slice_size, &cslice_enc_params, &cframe_rate_control);
+  }
   if(wfd_res != GST_WFD_OK) {
       GST_ERROR("Failed to get prefered video format.");
       return GST_RTSP_ERROR;

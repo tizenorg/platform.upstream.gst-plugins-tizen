@@ -27,6 +27,10 @@
 
 G_BEGIN_DECLS
 
+#define GST_STRING_WFD2_AUDIO_CODECS              "wfd2_audio_codecs"
+#define GST_STRING_WFD2_VIDEO_FORMATS             "wfd2_video_formats"
+#define GST_STRING_WFD2_DIRECT_STREAMING_MODE     "wfd2_direct_streaming_mode"
+
 #define GST_STRING_WFD_AUDIO_CODECS               "wfd_audio_codecs"
 #define GST_STRING_WFD_VIDEO_FORMATS              "wfd_video_formats"
 #define GST_STRING_WFD_3D_VIDEO_FORMATS           "wfd_3d_video_formats"
@@ -47,6 +51,7 @@ G_BEGIN_DECLS
 #define GST_STRING_WFD_NONE                       "none"
 #define GST_STRING_WFD_ENABLE                     "enable"
 #define GST_STRING_WFD_DISABLE                    "disable"
+#define GST_STRING_WFD_ACTIVE                     "active"
 #define GST_STRING_WFD_CRLF                       "\r\n"
 #define GST_STRING_WFD_SPACE                      " "
 #define GST_STRING_WFD_INPUT_CATEGORY_LIST        "input_category_list"
@@ -95,6 +100,9 @@ G_BEGIN_DECLS
 #define GST_STRING_WFD_COLON                      ":"
 #define GST_STRING_WFD_SEMI_COLON                 ";"
 #define GST_STRING_WFD_SLASH                      "/"
+
+#define GST_CHECK_VIDEO_FORMAT                    0x7
+#define GST_SHIFT_VIDEO_FORMAT                    3
 
 /**
  * GstWFDResult:
@@ -310,6 +318,11 @@ typedef struct {
   GstWFDAudioCodec *list;
 } GstWFDAudioCodeclist;
 
+typedef struct {
+  guint  count;
+  GstWFDAudioCodec *list;
+} GstWFD2AudioCodeclist;
+
 
 typedef struct {
   guint CEA_Support;
@@ -339,6 +352,11 @@ typedef struct {
   guint count;
   GstWFDVideoCodec *list;
 } GstWFDVideoCodeclist;
+
+typedef struct {
+  guint count;
+  GstWFDVideoCodec *list;
+} GstWFD2VideoCodeclist;
 
 typedef struct {
   guint64 video_3d_capability;
@@ -456,12 +474,18 @@ typedef struct {
   gboolean idr_request;
 } GstWFDIdrRequest;
 
+typedef struct {
+  gboolean direct_mode;
+} GstWFD2DirectStreamingMode;
+
 /***********************************************************/
 
 typedef struct {
 
   GstWFDAudioCodeclist *audio_codecs;
   GstWFDVideoCodeclist *video_formats;
+  GstWFD2AudioCodeclist *direct_audio_codecs;
+  GstWFD2VideoCodeclist *direct_video_formats;
   GstWFD3DFormats *video_3d_formats;
   GstWFDContentProtection *content_protection;
   GstWFDDisplayEdid *display_edid;
@@ -477,6 +501,7 @@ typedef struct {
   GstWFDStandby *standby;
   GstWFDConnectorType *connector_type;
   GstWFDIdrRequest *idr_request;
+  GstWFD2DirectStreamingMode *direct_mode;
 } GstWFDMessage;
 
 /* Session descriptions */
@@ -527,6 +552,42 @@ GstWFDResult gst_wfd_message_get_prefered_video_format(GstWFDMessage *msg, GstWF
                                               GstWFDVideoH264Level *vLevel, guint32 *vLatency, guint32 *vMaxHeight,
                                               guint32 *vMaxWidth, guint32 *min_slice_size, guint32 *slice_enc_params, guint *frame_rate_control);
 
+GstWFDResult gst_wfd_message_set_supported_direct_audio_format(GstWFDMessage *msg,
+                                               guint aCodec, guint aFreq, guint aChanels,
+                                               guint aBitwidth, guint32 aLatency);
+GstWFDResult gst_wfd_message_set_preferred_direct_audio_format(GstWFDMessage *msg,
+                                              GstWFDAudioFormats aCodec, GstWFDAudioFreq aFreq, GstWFDAudioChannels aChanels,
+                                              guint aBitwidth, guint32 aLatency);
+GstWFDResult gst_wfd_message_get_supported_direct_audio_format(GstWFDMessage *msg,
+                                               guint *aCodec, guint *aFreq, guint *aChanels,
+                                               guint *aBitwidth, guint32 *aLatency);
+GstWFDResult gst_wfd_message_get_preferred_direct_audio_format(GstWFDMessage *msg,
+                                              GstWFDAudioFormats *aCodec, GstWFDAudioFreq *aFreq, GstWFDAudioChannels *aChanels,
+                                              guint *aBitwidth, guint32 *aLatency);
+
+GstWFDResult gst_wfd_message_set_supported_direct_video_format(GstWFDMessage *msg, GstWFDVideoCodecs vCodec,
+                                               GstWFDVideoNativeResolution vNative, guint64 vNativeResolution,
+                                               guint64 vCEAResolution, guint64 vVESAResolution, guint64 vHHResolution,
+                                               guint vProfile, guint vLevel, guint32 vLatency, guint32 vMaxHeight,
+                                               guint32 vMaxWidth, guint32 min_slice_size, guint32 slice_enc_params, guint frame_rate_control,
+                                               guint preferred_display_mode);
+GstWFDResult gst_wfd_message_set_preferred_direct_video_format(GstWFDMessage *msg, GstWFDVideoCodecs vCodec,
+                                              GstWFDVideoNativeResolution vNative, guint64 vNativeResolution,
+                                              GstWFDVideoCEAResolution vCEAResolution, GstWFDVideoVESAResolution vVESAResolution,
+                                              GstWFDVideoHHResolution vHHResolution, GstWFDVideoH264Profile vProfile,
+                                              GstWFDVideoH264Level vLevel, guint32 vLatency, guint32 vMaxHeight,
+                                              guint32 vMaxWidth, guint32 min_slice_size, guint32 slice_enc_params, guint frame_rate_control);
+GstWFDResult gst_wfd_message_get_supported_direct_video_format(GstWFDMessage *msg, GstWFDVideoCodecs *vCodec,
+                                               GstWFDVideoNativeResolution *vNative, guint64 *vNativeResolution,
+                                               guint64 *vCEAResolution, guint64 *vVESAResolution, guint64 *vHHResolution,
+                                               guint *vProfile, guint *vLevel, guint32 *vLatency, guint32 *vMaxHeight,
+                                               guint32 *vMaxWidth, guint32 *min_slice_size, guint32 *slice_enc_params, guint *frame_rate_control);
+GstWFDResult gst_wfd_message_get_preferred_direct_video_format(GstWFDMessage *msg, GstWFDVideoCodecs *vCodec,
+                                              GstWFDVideoNativeResolution *vNative, guint64 *vNativeResolution,
+                                              GstWFDVideoCEAResolution *vCEAResolution, GstWFDVideoVESAResolution *vVESAResolution,
+                                              GstWFDVideoHHResolution *vHHResolution, GstWFDVideoH264Profile *vProfile,
+                                              GstWFDVideoH264Level *vLevel, guint32 *vLatency, guint32 *vMaxHeight,
+                                              guint32 *vMaxWidth, guint32 *min_slice_size, guint32 *slice_enc_params, guint *frame_rate_control);
 /* Todo wfd-3d-formats */
 
 GstWFDResult gst_wfd_message_set_contentprotection_type(GstWFDMessage *msg, GstWFDHDCPProtection hdcpversion, guint32 TCPPort);
@@ -571,6 +632,8 @@ GstWFDResult gst_wfd_message_set_connector_type(GstWFDMessage *msg, GstWFDConnec
 GstWFDResult gst_wfd_message_get_connector_type(GstWFDMessage *msg, GstWFDConnector *connector);
 
 GstWFDResult gst_wfd_message_set_idr_request(GstWFDMessage *msg);
+
+GstWFDResult gst_wfd_message_get_direct_streaming_mode(GstWFDMessage *msg, gboolean *enabled);
 
 G_END_DECLS
 

@@ -131,6 +131,24 @@ gst_wfd_message_uninit(GstWFDMessage *msg)
     FREE_STRING(msg->video_formats);
   }
 
+  if (msg->direct_audio_codecs) {
+    guint i = 0;
+    if (msg->direct_audio_codecs->list) {
+      for (; i < msg->direct_audio_codecs->count; i++) {
+        FREE_STRING(msg->direct_audio_codecs->list[i].audio_format);
+        msg->direct_audio_codecs->list[i].modes = 0;
+        msg->direct_audio_codecs->list[i].latency = 0;
+      }
+      FREE_STRING(msg->direct_audio_codecs->list);
+    }
+    FREE_STRING(msg->direct_audio_codecs);
+  }
+
+  if (msg->direct_video_formats) {
+    FREE_STRING(msg->direct_video_formats->list);
+    FREE_STRING(msg->direct_video_formats);
+  }
+
   if (msg->video_3d_formats) {
     FREE_STRING(msg->video_3d_formats->list);
     FREE_STRING(msg->video_3d_formats);
@@ -207,6 +225,10 @@ gst_wfd_message_uninit(GstWFDMessage *msg)
 
   if (msg->idr_request) {
     FREE_STRING(msg->idr_request);
+  }
+
+  if (msg->direct_mode) {
+    FREE_STRING(msg->direct_mode);
   }
 
   return GST_WFD_OK;
@@ -294,6 +316,58 @@ gst_wfd_message_as_text(const GstWFDMessage *msg)
       if (msg->video_formats->list->preferred_display_mode_supported == GST_WFD_PREFERRED_DISPLAY_MODE_SUPPORTED
         && msg->video_formats->list->H264_codec.max_vres) {
         g_string_append_printf(lines, " %04x", msg->video_formats->list->H264_codec.max_vres);
+      } else {
+        g_string_append_printf(lines, GST_STRING_WFD_SPACE);
+        g_string_append_printf(lines, GST_STRING_WFD_NONE);
+      }
+    }
+    g_string_append_printf(lines, GST_STRING_WFD_CRLF);
+  }
+
+  /* list of audio codecs for direct streaming */
+  if (msg->direct_audio_codecs) {
+    guint i = 0;
+    g_string_append_printf(lines, GST_STRING_WFD2_AUDIO_CODECS);
+    if (msg->direct_audio_codecs->list) {
+      g_string_append_printf(lines, GST_STRING_WFD_COLON);
+      for (; i < msg->direct_audio_codecs->count; i++) {
+        g_string_append_printf(lines, " %s", msg->direct_audio_codecs->list[i].audio_format);
+        g_string_append_printf(lines, " %08x", msg->direct_audio_codecs->list[i].modes);
+        g_string_append_printf(lines, " %02x", msg->direct_audio_codecs->list[i].latency);
+        if ((i + 1) < msg->direct_audio_codecs->count)
+          g_string_append_printf(lines, GST_STRING_WFD_COMMA);
+      }
+    }
+    g_string_append_printf(lines, GST_STRING_WFD_CRLF);
+  }
+
+  /* list of video codecs for direct streaming */
+  if (msg->direct_video_formats) {
+    g_string_append_printf(lines, GST_STRING_WFD2_VIDEO_FORMATS);
+    if (msg->direct_video_formats->list) {
+      g_string_append_printf(lines, GST_STRING_WFD_COLON);
+      g_string_append_printf(lines, " %02x", msg->direct_video_formats->list->native);
+      g_string_append_printf(lines, " %02x", msg->direct_video_formats->list->preferred_display_mode_supported);
+      g_string_append_printf(lines, " %02x", msg->direct_video_formats->list->H264_codec.profile);
+      g_string_append_printf(lines, " %02x", msg->direct_video_formats->list->H264_codec.level);
+      g_string_append_printf(lines, " %08x", msg->direct_video_formats->list->H264_codec.misc_params.CEA_Support);
+      g_string_append_printf(lines, " %08x", msg->direct_video_formats->list->H264_codec.misc_params.VESA_Support);
+      g_string_append_printf(lines, " %08x", msg->direct_video_formats->list->H264_codec.misc_params.HH_Support);
+      g_string_append_printf(lines, " %02x", msg->direct_video_formats->list->H264_codec.misc_params.latency);
+      g_string_append_printf(lines, " %04x", msg->direct_video_formats->list->H264_codec.misc_params.min_slice_size);
+      g_string_append_printf(lines, " %04x", msg->direct_video_formats->list->H264_codec.misc_params.slice_enc_params);
+      g_string_append_printf(lines, " %02x", msg->direct_video_formats->list->H264_codec.misc_params.frame_rate_control_support);
+
+      if (msg->direct_video_formats->list->preferred_display_mode_supported == GST_WFD_PREFERRED_DISPLAY_MODE_SUPPORTED
+        && msg->direct_video_formats->list->H264_codec.max_hres) {
+        g_string_append_printf(lines, " %04x", msg->direct_video_formats->list->H264_codec.max_hres);
+      } else {
+        g_string_append_printf(lines, GST_STRING_WFD_SPACE);
+        g_string_append_printf(lines, GST_STRING_WFD_NONE);
+      }
+      if (msg->direct_video_formats->list->preferred_display_mode_supported == GST_WFD_PREFERRED_DISPLAY_MODE_SUPPORTED
+        && msg->direct_video_formats->list->H264_codec.max_vres) {
+        g_string_append_printf(lines, " %04x", msg->direct_video_formats->list->H264_codec.max_vres);
       } else {
         g_string_append_printf(lines, GST_STRING_WFD_SPACE);
         g_string_append_printf(lines, GST_STRING_WFD_NONE);
@@ -508,6 +582,14 @@ gst_wfd_message_as_text(const GstWFDMessage *msg)
     g_string_append_printf(lines, GST_STRING_WFD_CRLF);
   }
 
+  if (msg->direct_mode && msg->direct_mode->direct_mode) {
+    g_string_append_printf(lines, GST_STRING_WFD2_DIRECT_STREAMING_MODE);
+    g_string_append_printf(lines, GST_STRING_WFD_COLON);
+    g_string_append_printf(lines, GST_STRING_WFD_SPACE);
+    g_string_append_printf(lines, GST_STRING_WFD_ACTIVE);
+    g_string_append_printf(lines, GST_STRING_WFD_CRLF);
+  }
+
   /*g_string_append_printf (lines, "\0"); */
   /*if(g_str_has_suffix (lines, "\r\n\0"))
   {
@@ -533,6 +615,16 @@ gchar *gst_wfd_message_param_names_as_text(const GstWFDMessage *msg)
   /* list of video codecs */
   if (msg->video_formats) {
     g_string_append_printf(lines, GST_STRING_WFD_VIDEO_FORMATS);
+    g_string_append_printf(lines, GST_STRING_WFD_CRLF);
+  }
+  /* list of audio codecs for direct streaming */
+  if (msg->direct_audio_codecs) {
+    g_string_append_printf(lines, GST_STRING_WFD2_AUDIO_CODECS);
+    g_string_append_printf(lines, GST_STRING_WFD_CRLF);
+  }
+  /* list of video codecs  for direct streaming*/
+  if (msg->direct_video_formats) {
+    g_string_append_printf(lines, GST_STRING_WFD2_VIDEO_FORMATS);
     g_string_append_printf(lines, GST_STRING_WFD_CRLF);
   }
   /* list of video 3D codecs */
@@ -594,6 +686,10 @@ gchar *gst_wfd_message_param_names_as_text(const GstWFDMessage *msg)
   }
   if (msg->idr_request) {
     g_string_append_printf(lines, GST_STRING_WFD_IDR_REQUEST);
+    g_string_append_printf(lines, GST_STRING_WFD_CRLF);
+  }
+  if (msg->direct_mode) {
+    g_string_append_printf(lines, GST_STRING_WFD2_DIRECT_STREAMING_MODE);
     g_string_append_printf(lines, GST_STRING_WFD_CRLF);
   }
   return g_string_free(lines, FALSE);
@@ -707,6 +803,57 @@ gst_wfd_parse_line(GstWFDMessage *msg, gchar *buffer)
         GST_WFD_READ_UINT32(msg->video_formats->list->H264_codec.max_hres);
         GST_WFD_SKIP_SPACE(v);
         GST_WFD_READ_UINT32(msg->video_formats->list->H264_codec.max_vres);
+        GST_WFD_SKIP_SPACE(v);
+      }
+    }
+  } else if (!g_strcmp0(type, GST_STRING_WFD2_AUDIO_CODECS)) {
+    msg->direct_audio_codecs = g_new0(GstWFD2AudioCodeclist, 1);
+    if (strlen(v)) {
+      guint i = 0;
+      msg->direct_audio_codecs->count = strlen(v) / 16;
+      msg->direct_audio_codecs->list = g_new0(GstWFDAudioCodec, msg->direct_audio_codecs->count);
+      for (; i < msg->direct_audio_codecs->count; i++) {
+        GST_WFD_SKIP_SPACE(v);
+        GST_WFD_READ_STRING(msg->direct_audio_codecs->list[i].audio_format);
+        GST_WFD_SKIP_SPACE(v);
+        GST_WFD_READ_UINT32(msg->direct_audio_codecs->list[i].modes);
+        GST_WFD_SKIP_SPACE(v);
+        GST_WFD_READ_UINT32(msg->direct_audio_codecs->list[i].latency);
+        GST_WFD_SKIP_COMMA(v);
+      }
+    }
+  } else if (!g_strcmp0(type, GST_STRING_WFD2_VIDEO_FORMATS)) {
+    msg->direct_video_formats = g_new0(GstWFD2VideoCodeclist, 1);
+    if (strlen(v)) {
+      msg->direct_video_formats->count = 1;
+      msg->direct_video_formats->list = g_new0(GstWFDVideoCodec, 1);
+      GST_WFD_SKIP_SPACE(v);
+      GST_WFD_READ_UINT32(msg->direct_video_formats->list->native);
+      GST_WFD_SKIP_SPACE(v);
+      GST_WFD_READ_UINT32(msg->direct_video_formats->list->preferred_display_mode_supported);
+      GST_WFD_SKIP_SPACE(v);
+      GST_WFD_READ_UINT32(msg->direct_video_formats->list->H264_codec.profile);
+      GST_WFD_SKIP_SPACE(v);
+      GST_WFD_READ_UINT32(msg->direct_video_formats->list->H264_codec.level);
+      GST_WFD_SKIP_SPACE(v);
+      GST_WFD_READ_UINT32(msg->direct_video_formats->list->H264_codec.misc_params.CEA_Support);
+      GST_WFD_SKIP_SPACE(v);
+      GST_WFD_READ_UINT32(msg->direct_video_formats->list->H264_codec.misc_params.VESA_Support);
+      GST_WFD_SKIP_SPACE(v);
+      GST_WFD_READ_UINT32(msg->direct_video_formats->list->H264_codec.misc_params.HH_Support);
+      GST_WFD_SKIP_SPACE(v);
+      GST_WFD_READ_UINT32(msg->direct_video_formats->list->H264_codec.misc_params.latency);
+      GST_WFD_SKIP_SPACE(v);
+      GST_WFD_READ_UINT32(msg->direct_video_formats->list->H264_codec.misc_params.min_slice_size);
+      GST_WFD_SKIP_SPACE(v);
+      GST_WFD_READ_UINT32(msg->direct_video_formats->list->H264_codec.misc_params.slice_enc_params);
+      GST_WFD_SKIP_SPACE(v);
+      GST_WFD_READ_UINT32(msg->direct_video_formats->list->H264_codec.misc_params.frame_rate_control_support);
+      GST_WFD_SKIP_SPACE(v);
+      if (msg->direct_video_formats->list->preferred_display_mode_supported == GST_WFD_PREFERRED_DISPLAY_MODE_SUPPORTED) {
+        GST_WFD_READ_UINT32(msg->direct_video_formats->list->H264_codec.max_hres);
+        GST_WFD_SKIP_SPACE(v);
+        GST_WFD_READ_UINT32(msg->direct_video_formats->list->H264_codec.max_vres);
         GST_WFD_SKIP_SPACE(v);
       }
     }
@@ -922,6 +1069,15 @@ gst_wfd_parse_line(GstWFDMessage *msg, gchar *buffer)
   } else if (!g_strcmp0(type, GST_STRING_WFD_IDR_REQUEST)) {
     msg->idr_request = g_new0(GstWFDIdrRequest, 1);
     msg->idr_request->idr_request = TRUE;
+  } else if (!g_strcmp0(type, GST_STRING_WFD2_DIRECT_STREAMING_MODE)) {
+    msg->direct_mode = g_new0(GstWFD2DirectStreamingMode, 1);
+    if (strlen(v)) {
+      GST_WFD_SKIP_SPACE(v);
+      if (!g_strcmp0(v, GST_STRING_WFD_ACTIVE))
+        msg->direct_mode->direct_mode = TRUE;
+      else
+        msg->direct_mode->direct_mode = FALSE;
+    }
   }
 
   return TRUE;
@@ -1068,6 +1224,88 @@ gst_wfd_message_dump(const GstWFDMessage *msg)
     }
   }
 
+  if (msg->direct_audio_codecs) {
+    guint i = 0;
+    g_print("Audio supported formats for direct streaming : ");
+    for (; i < msg->direct_audio_codecs->count; i++) {
+      g_print("Codec: %s", msg->direct_audio_codecs->list[i].audio_format);
+      if (!strcmp(msg->direct_audio_codecs->list[i].audio_format, GST_STRING_WFD_LPCM)) {
+        if (msg->direct_audio_codecs->list[i].modes & GST_WFD_FREQ_44100)
+          g_print("  Freq: %d", 44100);
+        if (msg->direct_audio_codecs->list[i].modes & GST_WFD_FREQ_48000)
+          g_print("  Freq: %d", 48000);
+        g_print("  Channels: %d", 2);
+      }
+      if (!strcmp(msg->direct_audio_codecs->list[i].audio_format, GST_STRING_WFD_AAC)) {
+        g_print("  Freq: %d", 48000);
+        if (msg->direct_audio_codecs->list[i].modes & GST_WFD_CHANNEL_2)
+          g_print("  Channels: %d", 2);
+        if (msg->direct_audio_codecs->list[i].modes & GST_WFD_CHANNEL_4)
+          g_print("  Channels: %d", 4);
+        if (msg->direct_audio_codecs->list[i].modes & GST_WFD_CHANNEL_6)
+          g_print("  Channels: %d", 6);
+        if (msg->direct_audio_codecs->list[i].modes & GST_WFD_CHANNEL_8)
+          g_print("  Channels: %d", 8);
+      }
+      if (!strcmp(msg->direct_audio_codecs->list[i].audio_format, GST_STRING_WFD_AC3)) {
+        g_print("  Freq: %d", 48000);
+        if (msg->direct_audio_codecs->list[i].modes & GST_WFD_CHANNEL_2)
+          g_print("  Channels: %d", 2);
+        if (msg->direct_audio_codecs->list[i].modes & GST_WFD_CHANNEL_4)
+          g_print("  Channels: %d", 4);
+        if (msg->direct_audio_codecs->list[i].modes & GST_WFD_CHANNEL_6)
+          g_print("  Channels: %d", 6);
+      }
+      g_print("  Bitwidth: %d", 16);
+      g_print("  Latency: %d", msg->direct_audio_codecs->list[i].latency);
+    }
+  }
+
+
+  if (msg->direct_video_formats) {
+    g_print("Video supported formats for direct streaming  : ");
+    if (msg->direct_video_formats->list) {
+      g_print("Codec: H264");
+      guint nativeindex = 0;
+      if ((msg->direct_video_formats->list->native & GST_CHECK_VIDEO_FORMAT) == GST_WFD_VIDEO_CEA_RESOLUTION) {
+        g_print("  Native type: CEA");
+      } else if ((msg->direct_video_formats->list->native & GST_CHECK_VIDEO_FORMAT) == GST_WFD_VIDEO_VESA_RESOLUTION) {
+        g_print("  Native type: VESA");
+      } else if ((msg->direct_video_formats->list->native & GST_CHECK_VIDEO_FORMAT) == GST_WFD_VIDEO_HH_RESOLUTION) {
+        g_print("  Native type: HH");
+      }
+      nativeindex = msg->direct_video_formats->list->native >> GST_SHIFT_VIDEO_FORMAT;
+      g_print("  Resolution: %d", (1 << nativeindex));
+
+      if (msg->direct_video_formats->list->H264_codec.profile & GST_WFD_H264_BASE_PROFILE) {
+        g_print("  Profile: BASE");
+      } else if (msg->direct_video_formats->list->H264_codec.profile & GST_WFD_H264_HIGH_PROFILE) {
+        g_print("  Profile: HIGH");
+      }
+      if (msg->direct_video_formats->list->H264_codec.level & GST_WFD_H264_LEVEL_3_1) {
+        g_print("  Level: 3.1");
+      } else if (msg->direct_video_formats->list->H264_codec.level & GST_WFD_H264_LEVEL_3_2) {
+        g_print("  Level: 3.2");
+      } else if (msg->direct_video_formats->list->H264_codec.level & GST_WFD_H264_LEVEL_4) {
+        g_print("  Level: 4");
+      } else if (msg->direct_video_formats->list->H264_codec.level & GST_WFD_H264_LEVEL_4_1) {
+        g_print("  Level: 4.1");
+      } else if (msg->direct_video_formats->list->H264_codec.level & GST_WFD_H264_LEVEL_4_2) {
+        g_print("  Level: 4.2");
+      }
+      g_print("  Latency: %d", msg->direct_video_formats->list->H264_codec.misc_params.latency);
+      g_print("  min_slice_size: %x", msg->direct_video_formats->list->H264_codec.misc_params.min_slice_size);
+      g_print("  slice_enc_params: %x", msg->direct_video_formats->list->H264_codec.misc_params.slice_enc_params);
+      g_print("  frame_rate_control_support: %x", msg->direct_video_formats->list->H264_codec.misc_params.frame_rate_control_support);
+      if (msg->direct_video_formats->list->H264_codec.max_hres) {
+        g_print("  Max Width: %04d", msg->direct_video_formats->list->H264_codec.max_hres);
+      }
+      if (msg->direct_video_formats->list->H264_codec.max_vres) {
+        g_print("  Max Height: %04d", msg->direct_video_formats->list->H264_codec.max_vres);
+      }
+    }
+  }
+
   if (msg->video_3d_formats) {
     g_print("wfd_3d_formats");
   }
@@ -1132,6 +1370,10 @@ gst_wfd_message_dump(const GstWFDMessage *msg)
 
   if (msg->idr_request) {
     g_print(GST_STRING_WFD_IDR_REQUEST);
+  }
+
+  if (msg->direct_mode) {
+    g_print(GST_STRING_WFD2_DIRECT_STREAMING_MODE);
   }
 
   g_print("===============================================");
@@ -1410,6 +1652,281 @@ GstWFDResult gst_wfd_message_get_prefered_video_format(GstWFDMessage *msg, GstWF
   *min_slice_size = msg->video_formats->list->H264_codec.misc_params.min_slice_size;
   *slice_enc_params = msg->video_formats->list->H264_codec.misc_params.slice_enc_params;
   *frame_rate_control = msg->video_formats->list->H264_codec.misc_params.frame_rate_control_support;
+  return GST_WFD_OK;
+}
+
+GstWFDResult gst_wfd_message_set_supported_direct_audio_format(GstWFDMessage *msg, GstWFDAudioFormats aCodec, guint aFreq, guint aChanels,
+                                               guint aBitwidth, guint32 aLatency)
+{
+  guint temp = aCodec;
+  guint i = 0;
+  guint pcm = 0, aac = 0, ac3 = 0;
+
+  g_return_val_if_fail(msg != NULL, GST_WFD_EINVAL);
+
+  if (!msg->direct_audio_codecs)
+    msg->direct_audio_codecs = g_new0(GstWFD2AudioCodeclist, 1);
+
+  if (aCodec != GST_WFD_AUDIO_UNKNOWN) {
+    while (temp) {
+      msg->direct_audio_codecs->count++;
+      temp >>= 1;
+    }
+    msg->direct_audio_codecs->list = g_new0(GstWFDAudioCodec, msg->direct_audio_codecs->count);
+    for (; i < msg->direct_audio_codecs->count; i++) {
+      if ((aCodec & GST_WFD_AUDIO_LPCM) && (!pcm)) {
+        msg->direct_audio_codecs->list[i].audio_format = g_strdup(GST_STRING_WFD_LPCM);
+        msg->direct_audio_codecs->list[i].modes = aFreq;
+        msg->direct_audio_codecs->list[i].latency = aLatency;
+        pcm = 1;
+      } else if ((aCodec & GST_WFD_AUDIO_AAC) && (!aac)) {
+        msg->direct_audio_codecs->list[i].audio_format = g_strdup(GST_STRING_WFD_AAC);
+        msg->direct_audio_codecs->list[i].modes = aChanels;
+        msg->direct_audio_codecs->list[i].latency = aLatency;
+        aac = 1;
+      } else if ((aCodec & GST_WFD_AUDIO_AC3) && (!ac3)) {
+        msg->direct_audio_codecs->list[i].audio_format = g_strdup(GST_STRING_WFD_AC3);
+        msg->direct_audio_codecs->list[i].modes = aChanels;
+        msg->direct_audio_codecs->list[i].latency = aLatency;
+        ac3 = 1;
+      }
+    }
+  }
+  return GST_WFD_OK;
+}
+
+GstWFDResult gst_wfd_message_set_preferred_direct_audio_format(GstWFDMessage *msg, GstWFDAudioFormats aCodec, GstWFDAudioFreq aFreq, GstWFDAudioChannels aChanels,
+                                              guint aBitwidth, guint32 aLatency)
+{
+
+  g_return_val_if_fail(msg != NULL, GST_WFD_EINVAL);
+
+  if (!msg->direct_audio_codecs)
+    msg->direct_audio_codecs = g_new0(GstWFD2AudioCodeclist, 1);
+
+  msg->direct_audio_codecs->list = g_new0(GstWFDAudioCodec, 1);
+  msg->direct_audio_codecs->count = 1;
+  if (aCodec == GST_WFD_AUDIO_LPCM) {
+    msg->direct_audio_codecs->list->audio_format = g_strdup(GST_STRING_WFD_LPCM);
+    msg->direct_audio_codecs->list->modes = aFreq;
+    msg->direct_audio_codecs->list->latency = aLatency;
+  } else if (aCodec == GST_WFD_AUDIO_AAC) {
+    msg->direct_audio_codecs->list->audio_format = g_strdup(GST_STRING_WFD_AAC);
+    msg->direct_audio_codecs->list->modes = aChanels;
+    msg->direct_audio_codecs->list->latency = aLatency;
+  } else if (aCodec == GST_WFD_AUDIO_AC3) {
+    msg->direct_audio_codecs->list->audio_format = g_strdup(GST_STRING_WFD_AC3);
+    msg->direct_audio_codecs->list->modes = aChanels;
+    msg->direct_audio_codecs->list->latency = aLatency;
+  }
+  return GST_WFD_OK;
+}
+
+GstWFDResult gst_wfd_message_get_supported_direct_audio_format(GstWFDMessage *msg, guint *aCodec, guint *aFreq, guint *aChanels,
+                                               guint *aBitwidth, guint32 *aLatency)
+{
+  guint i = 0;
+  g_return_val_if_fail(msg != NULL, GST_WFD_EINVAL);
+  g_return_val_if_fail(msg->direct_audio_codecs != NULL, GST_WFD_EINVAL);
+
+  for (; i < msg->direct_audio_codecs->count; i++) {
+    if (!g_strcmp0(msg->direct_audio_codecs->list[i].audio_format, GST_STRING_WFD_LPCM)) {
+      *aCodec |= GST_WFD_AUDIO_LPCM;
+      *aFreq |= msg->direct_audio_codecs->list[i].modes;
+      *aChanels |= GST_WFD_CHANNEL_2;
+      *aBitwidth = 16;
+      *aLatency = msg->direct_audio_codecs->list[i].latency;
+    } else if (!g_strcmp0(msg->direct_audio_codecs->list[i].audio_format, GST_STRING_WFD_AAC)) {
+      *aCodec |= GST_WFD_AUDIO_AAC;
+      *aFreq |= GST_WFD_FREQ_48000;
+      *aChanels |= msg->direct_audio_codecs->list[i].modes;
+      *aBitwidth = 16;
+      *aLatency = msg->direct_audio_codecs->list[i].latency;
+    } else if (!g_strcmp0(msg->direct_audio_codecs->list[i].audio_format, GST_STRING_WFD_AC3)) {
+      *aCodec |= GST_WFD_AUDIO_AC3;
+      *aFreq |= GST_WFD_FREQ_48000;
+      *aChanels |= msg->direct_audio_codecs->list[i].modes;
+      *aBitwidth = 16;
+      *aLatency = msg->direct_audio_codecs->list[i].latency;
+    }
+  }
+  return GST_WFD_OK;
+}
+
+GstWFDResult gst_wfd_message_get_preferred_direct_audio_format(GstWFDMessage *msg, GstWFDAudioFormats *aCodec, GstWFDAudioFreq *aFreq, GstWFDAudioChannels *aChanels,
+                                              guint *aBitwidth, guint32 *aLatency)
+{
+  g_return_val_if_fail(msg != NULL, GST_WFD_EINVAL);
+
+  if (!g_strcmp0(msg->direct_audio_codecs->list->audio_format, GST_STRING_WFD_LPCM)) {
+    *aCodec = GST_WFD_AUDIO_LPCM;
+    *aFreq = msg->direct_audio_codecs->list->modes;
+    *aChanels = GST_WFD_CHANNEL_2;
+    *aBitwidth = 16;
+    *aLatency = msg->direct_audio_codecs->list->latency;
+  } else if (!g_strcmp0(msg->direct_audio_codecs->list->audio_format, GST_STRING_WFD_AAC)) {
+    *aCodec = GST_WFD_AUDIO_AAC;
+    *aFreq = GST_WFD_FREQ_48000;
+    *aChanels = msg->direct_audio_codecs->list->modes;
+    *aBitwidth = 16;
+    *aLatency = msg->direct_audio_codecs->list->latency;
+  } else if (!g_strcmp0(msg->direct_audio_codecs->list->audio_format, GST_STRING_WFD_AC3)) {
+    *aCodec = GST_WFD_AUDIO_AC3;
+    *aFreq = GST_WFD_FREQ_48000;
+    *aChanels = msg->direct_audio_codecs->list->modes;
+    *aBitwidth = 16;
+    *aLatency = msg->direct_audio_codecs->list->latency;
+  }
+  return GST_WFD_OK;
+}
+
+GstWFDResult gst_wfd_message_set_supported_direct_video_format(GstWFDMessage *msg, GstWFDVideoCodecs vCodec,
+                                               GstWFDVideoNativeResolution vNative, guint64 vNativeResolution,
+                                               guint64 vCEAResolution, guint64 vVESAResolution, guint64 vHHResolution,
+                                               guint vProfile, guint vLevel, guint32 vLatency, guint32 vMaxHeight,
+                                               guint32 vMaxWidth, guint32 min_slice_size, guint32 slice_enc_params, guint frame_rate_control,
+                                               guint preferred_display_mode)
+{
+  guint nativeindex = 0;
+  guint64 temp = vNativeResolution;
+
+  g_return_val_if_fail(msg != NULL, GST_WFD_EINVAL);
+
+  if (!msg->direct_video_formats)
+    msg->direct_video_formats = g_new0(GstWFD2VideoCodeclist, 1);
+
+  if (vCodec != GST_WFD_VIDEO_UNKNOWN) {
+    msg->direct_video_formats->list = g_new0(GstWFDVideoCodec, 1);
+    while (temp) {
+      nativeindex++;
+      temp >>= 1;
+    }
+
+    msg->direct_video_formats->list->native = nativeindex - 1;
+    msg->direct_video_formats->list->native <<= GST_SHIFT_VIDEO_FORMAT;
+
+    if (vNative == GST_WFD_VIDEO_VESA_RESOLUTION)
+      msg->direct_video_formats->list->native |= 1;
+    else if (vNative == GST_WFD_VIDEO_HH_RESOLUTION)
+      msg->direct_video_formats->list->native |= 2;
+
+    msg->direct_video_formats->list->preferred_display_mode_supported = preferred_display_mode;
+    msg->direct_video_formats->list->H264_codec.profile = vProfile;
+    msg->direct_video_formats->list->H264_codec.level = vLevel;
+    msg->direct_video_formats->list->H264_codec.max_hres = vMaxWidth;
+    msg->direct_video_formats->list->H264_codec.max_vres = vMaxHeight;
+    msg->direct_video_formats->list->H264_codec.misc_params.CEA_Support = vCEAResolution;
+    msg->direct_video_formats->list->H264_codec.misc_params.VESA_Support = vVESAResolution;
+    msg->direct_video_formats->list->H264_codec.misc_params.HH_Support = vHHResolution;
+    msg->direct_video_formats->list->H264_codec.misc_params.latency = vLatency;
+    msg->direct_video_formats->list->H264_codec.misc_params.min_slice_size = min_slice_size;
+    msg->direct_video_formats->list->H264_codec.misc_params.slice_enc_params = slice_enc_params;
+    msg->direct_video_formats->list->H264_codec.misc_params.frame_rate_control_support = frame_rate_control;
+  }
+  return GST_WFD_OK;
+}
+
+GstWFDResult gst_wfd_message_set_preferred_direct_video_format(GstWFDMessage *msg, GstWFDVideoCodecs vCodec,
+                                              GstWFDVideoNativeResolution vNative, guint64 vNativeResolution,
+                                              GstWFDVideoCEAResolution vCEAResolution, GstWFDVideoVESAResolution vVESAResolution,
+                                              GstWFDVideoHHResolution vHHResolution,  GstWFDVideoH264Profile vProfile,
+                                              GstWFDVideoH264Level vLevel, guint32 vLatency, guint32 vMaxHeight,
+                                              guint32 vMaxWidth, guint32 min_slice_size, guint32 slice_enc_params, guint frame_rate_control)
+{
+  guint nativeindex = 0;
+  guint64 temp = vNativeResolution;
+
+  g_return_val_if_fail(msg != NULL, GST_WFD_EINVAL);
+
+  if (!msg->direct_video_formats)
+    msg->direct_video_formats = g_new0(GstWFD2VideoCodeclist, 1);
+  msg->direct_video_formats->list = g_new0(GstWFDVideoCodec, 1);
+
+  while (temp) {
+    nativeindex++;
+    temp >>= 1;
+  }
+
+  if (nativeindex) msg->direct_video_formats->list->native = nativeindex - 1;
+  msg->direct_video_formats->list->native <<= GST_SHIFT_VIDEO_FORMAT;
+
+  if (vNative == GST_WFD_VIDEO_VESA_RESOLUTION)
+    msg->direct_video_formats->list->native |= 1;
+  else if (vNative == GST_WFD_VIDEO_HH_RESOLUTION)
+    msg->direct_video_formats->list->native |= 2;
+
+  msg->direct_video_formats->list->preferred_display_mode_supported = GST_WFD_PREFERRED_DISPLAY_MODE_NOT_SUPPORTED;
+  msg->direct_video_formats->list->H264_codec.profile = vProfile;
+  msg->direct_video_formats->list->H264_codec.level = vLevel;
+  msg->direct_video_formats->list->H264_codec.max_hres = vMaxWidth;
+  msg->direct_video_formats->list->H264_codec.max_vres = vMaxHeight;
+  msg->direct_video_formats->list->H264_codec.misc_params.CEA_Support = vCEAResolution;
+  msg->direct_video_formats->list->H264_codec.misc_params.VESA_Support = vVESAResolution;
+  msg->direct_video_formats->list->H264_codec.misc_params.HH_Support = vHHResolution;
+  msg->direct_video_formats->list->H264_codec.misc_params.latency = vLatency;
+  msg->direct_video_formats->list->H264_codec.misc_params.min_slice_size = min_slice_size;
+  msg->direct_video_formats->list->H264_codec.misc_params.slice_enc_params = slice_enc_params;
+  msg->direct_video_formats->list->H264_codec.misc_params.frame_rate_control_support = frame_rate_control;
+  return GST_WFD_OK;
+}
+
+GstWFDResult gst_wfd_message_get_supported_direct_video_format(GstWFDMessage *msg, GstWFDVideoCodecs *vCodec,
+                                               GstWFDVideoNativeResolution *vNative, guint64 *vNativeResolution,
+                                               guint64 *vCEAResolution, guint64 *vVESAResolution, guint64 *vHHResolution,
+                                               guint *vProfile, guint *vLevel, guint32 *vLatency, guint32 *vMaxHeight,
+                                               guint32 *vMaxWidth, guint32 *min_slice_size, guint32 *slice_enc_params, guint *frame_rate_control)
+{
+  guint nativeindex = 0;
+
+  g_return_val_if_fail(msg != NULL, GST_WFD_EINVAL);
+  g_return_val_if_fail(msg->direct_video_formats != NULL, GST_WFD_EINVAL);
+  g_return_val_if_fail(msg->direct_video_formats->list != NULL, GST_WFD_EINVAL);
+
+  *vCodec = GST_WFD_VIDEO_H264;
+  *vNative = msg->direct_video_formats->list->native & GST_CHECK_VIDEO_FORMAT;
+  nativeindex = msg->direct_video_formats->list->native >> GST_SHIFT_VIDEO_FORMAT;
+  *vNativeResolution = (guint64)1 << nativeindex;
+  *vProfile = msg->direct_video_formats->list->H264_codec.profile;
+  *vLevel = msg->direct_video_formats->list->H264_codec.level;
+  *vMaxWidth = msg->direct_video_formats->list->H264_codec.max_hres;
+  *vMaxHeight = msg->direct_video_formats->list->H264_codec.max_vres;
+  *vCEAResolution = msg->direct_video_formats->list->H264_codec.misc_params.CEA_Support;
+  *vVESAResolution = msg->direct_video_formats->list->H264_codec.misc_params.VESA_Support;
+  *vHHResolution = msg->direct_video_formats->list->H264_codec.misc_params.HH_Support;
+  *vLatency = msg->direct_video_formats->list->H264_codec.misc_params.latency;
+  *min_slice_size = msg->direct_video_formats->list->H264_codec.misc_params.min_slice_size;
+  *slice_enc_params = msg->direct_video_formats->list->H264_codec.misc_params.slice_enc_params;
+  *frame_rate_control = msg->direct_video_formats->list->H264_codec.misc_params.frame_rate_control_support;
+  return GST_WFD_OK;
+}
+
+GstWFDResult gst_wfd_message_get_preferred_direct_video_format(GstWFDMessage *msg, GstWFDVideoCodecs *vCodec,
+                                              GstWFDVideoNativeResolution *vNative, guint64 *vNativeResolution,
+                                              GstWFDVideoCEAResolution *vCEAResolution, GstWFDVideoVESAResolution *vVESAResolution,
+                                              GstWFDVideoHHResolution *vHHResolution,  GstWFDVideoH264Profile *vProfile,
+                                              GstWFDVideoH264Level *vLevel, guint32 *vLatency, guint32 *vMaxHeight,
+                                              guint32 *vMaxWidth, guint32 *min_slice_size, guint32 *slice_enc_params, guint *frame_rate_control)
+{
+  guint nativeindex = 0;
+  g_return_val_if_fail(msg != NULL, GST_WFD_EINVAL);
+  g_return_val_if_fail(msg->direct_video_formats != NULL, GST_WFD_EINVAL);
+  g_return_val_if_fail(msg->direct_video_formats->list != NULL, GST_WFD_EINVAL);
+
+  *vCodec = GST_WFD_VIDEO_H264;
+  *vNative = msg->direct_video_formats->list->native & GST_CHECK_VIDEO_FORMAT;
+  nativeindex = msg->direct_video_formats->list->native >> GST_SHIFT_VIDEO_FORMAT;
+  *vNativeResolution = (guint64)1 << nativeindex;
+  *vProfile = msg->direct_video_formats->list->H264_codec.profile;
+  *vLevel = msg->direct_video_formats->list->H264_codec.level;
+  *vMaxWidth = msg->direct_video_formats->list->H264_codec.max_hres;
+  *vMaxHeight = msg->direct_video_formats->list->H264_codec.max_vres;
+  *vCEAResolution = msg->direct_video_formats->list->H264_codec.misc_params.CEA_Support;
+  *vVESAResolution = msg->direct_video_formats->list->H264_codec.misc_params.VESA_Support;
+  *vHHResolution = msg->direct_video_formats->list->H264_codec.misc_params.HH_Support;
+  *vLatency = msg->direct_video_formats->list->H264_codec.misc_params.latency;
+  *min_slice_size = msg->direct_video_formats->list->H264_codec.misc_params.min_slice_size;
+  *slice_enc_params = msg->direct_video_formats->list->H264_codec.misc_params.slice_enc_params;
+  *frame_rate_control = msg->direct_video_formats->list->H264_codec.misc_params.frame_rate_control_support;
   return GST_WFD_OK;
 }
 
@@ -1759,5 +2276,12 @@ GstWFDResult gst_wfd_message_set_idr_request(GstWFDMessage *msg)
   g_return_val_if_fail(msg != NULL, GST_WFD_EINVAL);
   if (!msg->idr_request) msg->idr_request = g_new0(GstWFDIdrRequest, 1);
   msg->idr_request->idr_request = TRUE;
+  return GST_WFD_OK;
+}
+
+GstWFDResult gst_wfd_message_get_direct_streaming_mode(GstWFDMessage *msg, gboolean *active)
+{
+  g_return_val_if_fail(msg != NULL, GST_WFD_EINVAL);
+  if (msg->direct_mode) *active = msg->direct_mode->direct_mode;
   return GST_WFD_OK;
 }
