@@ -1,11 +1,10 @@
 lib_LTLIBRARIES = libgstwfdbase.la
 
-#libgstwfdbase_includedir =	\
-#	$(includedir)/gstreamer-@GST_MAJORMINOR@/gst/wfd
-#libgstwfdbase_include_HEADERS =	\
-#	gstwfdbasesrc.h
+includelibgstwfdbasedir = $(includedir)/wfdmanager/wfdbase
 
-noinst_HEADERS = gstwfdbasesrc.h gstwfdsinkmessage.h
+includelibgstwfdbase_HEADERS =	gstwfdbasesrc.h
+
+noinst_HEADERS = gstwfdsinkmessage.h
 
 libgstwfdbase_la_SOURCES = gstwfdbasesrc.c \
 			gstwfdsinkmessage.c

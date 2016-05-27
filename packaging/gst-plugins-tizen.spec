@@ -5,7 +5,7 @@
 Name:       gst-plugins-tizen
 Version:    1.0.0
 Summary:    GStreamer tizen plugins (common)
-Release:    24
+Release:    25
 Group:      Multimedia/Framework
 Url:        http://gstreamer.freedesktop.org/
 License:    LGPL-2.1+
@@ -45,6 +45,14 @@ BuildRequires:  pkgconfig(gstreamer-wayland-1.0)
 %description
 GStreamer tizen plugins (common)
 
+%package devel
+Summary:        Include files and Libraries
+Requires:       %{name} = %{version}
+
+%description devel
+This package contains all necessary include files and libraries needed
+to compile and link applications that use gst-plugins-tizen.
+
 %prep
 %setup -q
 
@@ -78,3 +86,9 @@ cp -rf %{_builddir}/%{name}-%{version}/COPYING %{buildroot}%{_datadir}/license/%
 %{_libdir}/gstreamer-%{gst_branch}/*.so
 %{_libdir}/libgstwfdbase.so*
 %{_datadir}/license/%{name}
+
+%files devel
+%manifest gst-plugins-tizen1.0.manifest
+%{_includedir}/wfdmanager/wfdbase/gstwfdbasesrc.h
+%{_libdir}/gstreamer-%{gst_branch}/*.so
+%{_libdir}/libgstwfdbase.so*
