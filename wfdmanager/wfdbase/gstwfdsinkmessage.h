@@ -312,9 +312,9 @@ typedef struct {
 
 
 typedef struct {
-  guint CEA_Support;
-  guint VESA_Support;
-  guint HH_Support;
+  guint64 CEA_Support;
+  guint64 VESA_Support;
+  guint64 HH_Support;
   guint latency;
   guint min_slice_size;
   guint slice_enc_params;
@@ -511,8 +511,8 @@ GstWFDResult gst_wfd_message_set_supported_video_format(GstWFDMessage *msg, GstW
                                                guint preferred_display_mode);
 GstWFDResult gst_wfd_message_set_prefered_video_format(GstWFDMessage *msg, GstWFDVideoCodecs vCodec,
                                               GstWFDVideoNativeResolution vNative, guint64 vNativeResolution,
-                                              GstWFDVideoCEAResolution vCEAResolution, GstWFDVideoVESAResolution vVESAResolution,
-                                              GstWFDVideoHHResolution vHHResolution, GstWFDVideoH264Profile vProfile,
+                                              guint64 vCEAResolution, guint64 vVESAResolution,
+                                              guint64 vHHResolution, GstWFDVideoH264Profile vProfile,
                                               GstWFDVideoH264Level vLevel, guint32 vLatency, guint32 vMaxHeight,
                                               guint32 vMaxWidth, guint32 min_slice_size, guint32 slice_enc_params, guint frame_rate_control);
 GstWFDResult gst_wfd_message_get_supported_video_format(GstWFDMessage *msg, GstWFDVideoCodecs *vCodec,
@@ -522,8 +522,8 @@ GstWFDResult gst_wfd_message_get_supported_video_format(GstWFDMessage *msg, GstW
                                                guint32 *vMaxWidth, guint32 *min_slice_size, guint32 *slice_enc_params, guint *frame_rate_control);
 GstWFDResult gst_wfd_message_get_prefered_video_format(GstWFDMessage *msg, GstWFDVideoCodecs *vCodec,
                                               GstWFDVideoNativeResolution *vNative, guint64 *vNativeResolution,
-                                              GstWFDVideoCEAResolution *vCEAResolution, GstWFDVideoVESAResolution *vVESAResolution,
-                                              GstWFDVideoHHResolution *vHHResolution, GstWFDVideoH264Profile *vProfile,
+                                              guint64 *vCEAResolution, guint64 *vVESAResolution,
+                                              guint64 *vHHResolution, GstWFDVideoH264Profile *vProfile,
                                               GstWFDVideoH264Level *vLevel, guint32 *vLatency, guint32 *vMaxHeight,
                                               guint32 *vMaxWidth, guint32 *min_slice_size, guint32 *slice_enc_params, guint *frame_rate_control);
 

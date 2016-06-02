@@ -276,9 +276,9 @@ gst_wfd_message_as_text(const GstWFDMessage *msg)
       g_string_append_printf(lines, " %02x", msg->video_formats->list->preferred_display_mode_supported);
       g_string_append_printf(lines, " %02x", msg->video_formats->list->H264_codec.profile);
       g_string_append_printf(lines, " %02x", msg->video_formats->list->H264_codec.level);
-      g_string_append_printf(lines, " %08x", msg->video_formats->list->H264_codec.misc_params.CEA_Support);
-      g_string_append_printf(lines, " %08x", msg->video_formats->list->H264_codec.misc_params.VESA_Support);
-      g_string_append_printf(lines, " %08x", msg->video_formats->list->H264_codec.misc_params.HH_Support);
+      g_string_append_printf(lines, " %08llx", msg->video_formats->list->H264_codec.misc_params.CEA_Support);
+      g_string_append_printf(lines, " %08llx", msg->video_formats->list->H264_codec.misc_params.VESA_Support);
+      g_string_append_printf(lines, " %08llx", msg->video_formats->list->H264_codec.misc_params.HH_Support);
       g_string_append_printf(lines, " %02x", msg->video_formats->list->H264_codec.misc_params.latency);
       g_string_append_printf(lines, " %04x", msg->video_formats->list->H264_codec.misc_params.min_slice_size);
       g_string_append_printf(lines, " %04x", msg->video_formats->list->H264_codec.misc_params.slice_enc_params);
@@ -1311,8 +1311,8 @@ GstWFDResult gst_wfd_message_set_supported_video_format(GstWFDMessage *msg, GstW
 
 GstWFDResult gst_wfd_message_set_prefered_video_format(GstWFDMessage *msg, GstWFDVideoCodecs vCodec,
                                               GstWFDVideoNativeResolution vNative, guint64 vNativeResolution,
-                                              GstWFDVideoCEAResolution vCEAResolution, GstWFDVideoVESAResolution vVESAResolution,
-                                              GstWFDVideoHHResolution vHHResolution,  GstWFDVideoH264Profile vProfile,
+                                              guint64 vCEAResolution, guint64 vVESAResolution,
+                                              guint64 vHHResolution,  GstWFDVideoH264Profile vProfile,
                                               GstWFDVideoH264Level vLevel, guint32 vLatency, guint32 vMaxHeight,
                                               guint32 vMaxWidth, guint32 min_slice_size, guint32 slice_enc_params, guint frame_rate_control)
 {
@@ -1385,8 +1385,8 @@ GstWFDResult gst_wfd_message_get_supported_video_format(GstWFDMessage *msg, GstW
 
 GstWFDResult gst_wfd_message_get_prefered_video_format(GstWFDMessage *msg, GstWFDVideoCodecs *vCodec,
                                               GstWFDVideoNativeResolution *vNative, guint64 *vNativeResolution,
-                                              GstWFDVideoCEAResolution *vCEAResolution, GstWFDVideoVESAResolution *vVESAResolution,
-                                              GstWFDVideoHHResolution *vHHResolution,  GstWFDVideoH264Profile *vProfile,
+                                              guint64 *vCEAResolution, guint64 *vVESAResolution,
+                                              guint64 *vHHResolution,  GstWFDVideoH264Profile *vProfile,
                                               GstWFDVideoH264Level *vLevel, guint32 *vLatency, guint32 *vMaxHeight,
                                               guint32 *vMaxWidth, guint32 *min_slice_size, guint32 *slice_enc_params, guint *frame_rate_control)
 {

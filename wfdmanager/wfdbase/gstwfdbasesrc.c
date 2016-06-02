@@ -149,9 +149,9 @@ enum
   PROP_TCP_TIMEOUT,
   PROP_RTP_BLOCKSIZE,
   PROP_USER_AGENT,
-  PROP_AUDIO_PARAM,
-  PROP_VIDEO_PARAM,
-  PROP_HDCP_PARAM,
+  PROP_WFD_AUDIO_CODECS,
+  PROP_WFD_VIDEO_FORMATS,
+  PROP_WFD_CONTENT_PROTECTION,
   PROP_ENABLE_PAD_PROBE,
   PROP_LAST
 };
@@ -208,9 +208,9 @@ struct _GstWFDBaseSrcPrivate
   GTimeVal          tcp_timeout;
   GTimeVal         *ptcp_timeout;
   guint             rtp_blocksize;
-  GstStructure *audio_param;
-  GstStructure *video_param;
-  GstStructure *hdcp_param;
+  GstStructure *wfd_audio_codecs;
+  GstStructure *wfd_video_formats;
+  GstStructure *wfd_content_protection;
   gchar *user_agent;
 
   /* Set RTP port */
@@ -281,8 +281,10 @@ static GstRTSPResult
 gst_wfd_base_src_send (GstWFDBaseSrc * src, GstRTSPMessage * request, GstRTSPMessage * response,
     GstRTSPStatusCode * code);
 
-static GstRTSPResult gst_wfd_base_src_get_video_parameter(GstWFDBaseSrc * src, GstWFDMessage *msg);
-static GstRTSPResult gst_wfd_base_src_get_audio_parameter(GstWFDBaseSrc * src, GstWFDMessage *msg);
+static GstRTSPResult gst_wfd_base_src_get_wfd_video_formatseter(GstWFDBaseSrc * src,
+    GstWFDMessage *msg);
+static GstRTSPResult gst_wfd_base_src_get_wfd_audio_codecseter(GstWFDBaseSrc * src,
+    GstWFDMessage *msg);
 
 /* util */
 static GstRTSPResult _rtsp_message_dump (GstRTSPMessage * msg);
@@ -387,9 +389,9 @@ gst_wfd_base_src_class_init (GstWFDBaseSrcClass * klass)
           "User agent specified string", DEFAULT_USER_AGENT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
-  g_object_class_install_property (gobject_class, PROP_AUDIO_PARAM,
-      g_param_spec_boxed ("audio-param", "audio parameters",
-          "A GstStructure mapped for wfd audio parameters, "
+  g_object_class_install_property (gobject_class, PROP_WFD_AUDIO_CODECS,
+      g_param_spec_boxed ("wfd-audio-codecs", "Wi-Fi Display Audio codecs",
+          "A GstStructure mapped for Wi-Fi Display audio codecs parameters, "
           "See all attributes in WFD specification(wfd-audio-codecs)."
           "\n			audio_codec: LPCM:0x01, AAC:0x02, AC3:0x04"
           "\n			audio_latency: an integer"
@@ -397,15 +399,15 @@ gst_wfd_base_src_class_init (GstWFDBaseSrcClass * klass)
           "\n			audio_sampling_frequency: 44.1khz:1, 48khz:2\n",
           GST_TYPE_STRUCTURE, G_PARAM_READWRITE));
 
-  g_object_class_install_property (gobject_class, PROP_VIDEO_PARAM,
-      g_param_spec_boxed ("video-param", "video parameters",
-          "A GstStructure mapped for wfd video parameters, "
+  g_object_class_install_property (gobject_class, PROP_WFD_VIDEO_FORMATS,
+      g_param_spec_boxed ("wfd-video-formats", "Wi-Fi Display Video Formats",
+          "A GstStructure mapped for Wi-Fi Dispaly video formats parameters, "
           "See all attributes in WFD specification(wfd-video-formats).\n",
           GST_TYPE_STRUCTURE, G_PARAM_READWRITE));
 
-  g_object_class_install_property (gobject_class, PROP_HDCP_PARAM,
-      g_param_spec_boxed ("hdcp-param", "HDCP parameters",
-          "A GstStructure mapped for WFD HDCP parameters."
+  g_object_class_install_property (gobject_class, PROP_WFD_CONTENT_PROTECTION,
+      g_param_spec_boxed ("wfd-content-protection", "Wi-Fi Display Content Protection",
+          "A GstStructure mapped for Wi-Fi Display Content Protection HDCP parameters."
           "\n			hdcp_version: none:0, 2.0:1, 2.1:2"
           "\n			hdcp_port_no: an integer\n",
           GST_TYPE_STRUCTURE, G_PARAM_READWRITE));
@@ -469,10 +471,10 @@ gst_wfd_base_src_class_init (GstWFDBaseSrcClass * klass)
 }
 
 static GstStructure *
-gst_wfd_rtsp_set_default_audio_param ()
+gst_wfd_rtsp_set_default_wfd_audio_codecs ()
 {
   GstStructure *param = NULL;
-  param = gst_structure_new ("audio_param",
+  param = gst_structure_new ("wfd_audio_codecs",
         "audio_codec", G_TYPE_UINT, 0x3,
         "audio_latency", G_TYPE_UINT, 0x0,
         "audio_channels", G_TYPE_UINT, 0x3,
@@ -483,15 +485,15 @@ gst_wfd_rtsp_set_default_audio_param ()
 }
 
 static GstStructure *
-gst_wfd_rtsp_set_default_video_param ()
+gst_wfd_rtsp_set_default_wfd_video_formats ()
 {
   GstStructure *param = NULL;
-  param = gst_structure_new ("video_param",
+  param = gst_structure_new ("wfd_video_formats",
         "video_codec", G_TYPE_UINT, 0x1,
         "video_native_resolution", G_TYPE_UINT, 0x20,
-        "video_cea_support", G_TYPE_UINT, 0x194ab,
-        "video_vesa_support", G_TYPE_UINT, 0x15555555,
-        "video_hh_support", G_TYPE_UINT, 0x555,
+        "video_cea_support", G_TYPE_UINT64, 0x194abULL,
+        "video_vesa_support", G_TYPE_UINT64, 0x15555555ULL,
+        "video_hh_support", G_TYPE_UINT64, 0x555ULL,
         "video_profile", G_TYPE_UINT, 0x1,
         "video_level", G_TYPE_UINT, 0x2,
         "video_latency", G_TYPE_UINT, 0x0,
@@ -531,9 +533,9 @@ gst_wfd_base_src_init (GstWFDBaseSrc * src, gpointer g_class)
   gst_wfd_base_src_set_tcp_timeout (src, DEFAULT_TCP_TIMEOUT);
   src->priv->rtp_blocksize = DEFAULT_RTP_BLOCKSIZE;
   src->priv->user_agent = g_strdup (DEFAULT_USER_AGENT);
-  src->priv->hdcp_param = NULL;
-  src->priv->audio_param = gst_wfd_rtsp_set_default_audio_param ();
-  src->priv->video_param = gst_wfd_rtsp_set_default_video_param ();
+  src->priv->wfd_audio_codecs = gst_wfd_rtsp_set_default_wfd_audio_codecs ();
+  src->priv->wfd_video_formats = gst_wfd_rtsp_set_default_wfd_video_formats ();
+  src->priv->wfd_content_protection = NULL;
   src->priv->timebase = -1;
   src->priv->seqbase = -1;
   gst_rtsp_transport_init(&src->priv->transport);
@@ -587,15 +589,15 @@ gst_wfd_base_src_finalize (GObject * object)
   if (src->priv->user_agent)
     g_free (src->priv->user_agent);
   src->priv->user_agent = NULL;
-  if(src->priv->audio_param)
-    gst_structure_free(src->priv->audio_param);
-  src->priv->audio_param = NULL;
-  if(src->priv->video_param)
-    gst_structure_free(src->priv->video_param);
-  src->priv->video_param = NULL;
-  if(src->priv->hdcp_param)
-    gst_structure_free(src->priv->hdcp_param);
-  src->priv->hdcp_param = NULL;
+  if(src->priv->wfd_audio_codecs)
+    gst_structure_free(src->priv->wfd_audio_codecs);
+  src->priv->wfd_audio_codecs = NULL;
+  if(src->priv->wfd_video_formats)
+    gst_structure_free(src->priv->wfd_video_formats);
+  src->priv->wfd_video_formats = NULL;
+  if(src->priv->wfd_content_protection)
+    gst_structure_free(src->priv->wfd_content_protection);
+  src->priv->wfd_content_protection = NULL;
 
   /* free locks */
   g_rec_mutex_clear (&(src->state_rec_lock));
@@ -651,37 +653,37 @@ gst_wfd_base_src_set_property (GObject * object, guint prop_id, const GValue * v
         g_free(src->priv->user_agent);
       src->priv->user_agent = g_value_dup_string (value);
       break;
-    case PROP_AUDIO_PARAM:
+    case PROP_WFD_AUDIO_CODECS:
     {
       const GstStructure *s = gst_value_get_structure (value);
-      if (src->priv->audio_param)
-        gst_structure_free (src->priv->audio_param);
+      if (src->priv->wfd_audio_codecs)
+        gst_structure_free (src->priv->wfd_audio_codecs);
       if (s)
-        src->priv->audio_param = gst_structure_copy (s);
+        src->priv->wfd_audio_codecs = gst_structure_copy (s);
       else
-        src->priv->audio_param = NULL;
+        src->priv->wfd_audio_codecs = NULL;
       break;
     }
-    case PROP_VIDEO_PARAM:
+    case PROP_WFD_VIDEO_FORMATS:
     {
       const GstStructure *s = gst_value_get_structure (value);
-      if (src->priv->video_param)
-        gst_structure_free (src->priv->video_param);
+      if (src->priv->wfd_video_formats)
+        gst_structure_free (src->priv->wfd_video_formats);
       if (s)
-        src->priv->video_param = gst_structure_copy (s);
+        src->priv->wfd_video_formats = gst_structure_copy (s);
       else
-        src->priv->video_param = NULL;
+        src->priv->wfd_video_formats = NULL;
       break;
     }
-    case PROP_HDCP_PARAM:
+    case PROP_WFD_CONTENT_PROTECTION:
     {
       const GstStructure *s = gst_value_get_structure (value);
-      if (src->priv->hdcp_param)
-        gst_structure_free (src->priv->hdcp_param);
+      if (src->priv->wfd_content_protection)
+        gst_structure_free (src->priv->wfd_content_protection);
       if (s)
-        src->priv->hdcp_param = gst_structure_copy (s);
+        src->priv->wfd_content_protection = gst_structure_copy (s);
       else
-        src->priv->hdcp_param = NULL;
+        src->priv->wfd_content_protection = NULL;
       break;
     }
     case PROP_ENABLE_PAD_PROBE:
@@ -724,14 +726,14 @@ gst_wfd_base_src_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_USER_AGENT:
       g_value_set_string (value, src->priv->user_agent);
       break;
-    case PROP_AUDIO_PARAM:
-      gst_value_set_structure (value, src->priv->audio_param);
+    case PROP_WFD_AUDIO_CODECS:
+      gst_value_set_structure (value, src->priv->wfd_audio_codecs);
       break;
-    case PROP_VIDEO_PARAM:
-      gst_value_set_structure (value, src->priv->video_param);
+    case PROP_WFD_VIDEO_FORMATS:
+      gst_value_set_structure (value, src->priv->wfd_video_formats);
       break;
-    case PROP_HDCP_PARAM:
-      gst_value_set_structure (value, src->priv->hdcp_param);
+    case PROP_WFD_CONTENT_PROTECTION:
+      gst_value_set_structure (value, src->priv->wfd_content_protection);
       break;
     case PROP_ENABLE_PAD_PROBE:
       g_value_set_boolean (value, src->enable_pad_probe);
@@ -1396,16 +1398,16 @@ gst_wfd_base_src_handle_request (GstWFDBaseSrc * src, GstRTSPMessage * request)
         guint audio_channels = 0;
         guint audio_latency = 0;
 
-        if(priv->audio_param != NULL) {
-          GstStructure *audio_param = priv->audio_param;
-          if (gst_structure_has_field (audio_param, "audio_codec"))
-            gst_structure_get_uint (audio_param, "audio_codec", &audio_codec);
-          if (gst_structure_has_field (audio_param, "audio_latency"))
-            gst_structure_get_uint (audio_param, "audio_latency", &audio_latency);
-          if (gst_structure_has_field (audio_param, "audio_channels"))
-            gst_structure_get_uint (audio_param, "audio_channels", &audio_channels);
-          if (gst_structure_has_field (audio_param, "audio_sampling_frequency"))
-            gst_structure_get_uint (audio_param, "audio_sampling_frequency", &audio_sampling_frequency);
+        if(priv->wfd_audio_codecs != NULL) {
+          GstStructure *wfd_audio_codecs = priv->wfd_audio_codecs;
+          if (gst_structure_has_field (wfd_audio_codecs, "audio_codec"))
+            gst_structure_get_uint (wfd_audio_codecs, "audio_codec", &audio_codec);
+          if (gst_structure_has_field (wfd_audio_codecs, "audio_latency"))
+            gst_structure_get_uint (wfd_audio_codecs, "audio_latency", &audio_latency);
+          if (gst_structure_has_field (wfd_audio_codecs, "audio_channels"))
+            gst_structure_get_uint (wfd_audio_codecs, "audio_channels", &audio_channels);
+          if (gst_structure_has_field (wfd_audio_codecs, "audio_sampling_frequency"))
+            gst_structure_get_uint (wfd_audio_codecs, "audio_sampling_frequency", &audio_sampling_frequency);
         }
 
         wfd_res = gst_wfd_message_set_supported_audio_format (wfd_msg,
@@ -1428,9 +1430,9 @@ gst_wfd_base_src_handle_request (GstWFDBaseSrc * src, GstRTSPMessage * request)
       if(wfd_msg->video_formats) {
         guint video_codec = 0;
         guint video_native_resolution = 0;
-        guint video_cea_support = 0;
-        guint video_vesa_support = 0;
-        guint video_hh_support = 0;
+        guint64 video_cea_support = 0;
+        guint64 video_vesa_support = 0;
+        guint64 video_hh_support = 0;
         guint video_profile = 0;
         guint video_level = 0;
         guint video_latency = 0;
@@ -1440,35 +1442,35 @@ gst_wfd_base_src_handle_request (GstWFDBaseSrc * src, GstRTSPMessage * request)
         gint video_slice_enc_param = 0;
         gint video_framerate_control_support = 0;
 
-        if (priv->video_param != NULL) {
-          GstStructure *video_param = priv->video_param;
+        if (priv->wfd_video_formats != NULL) {
+          GstStructure *wfd_video_formats = priv->wfd_video_formats;
 
-          if (gst_structure_has_field (video_param, "video_codec"))
-            gst_structure_get_uint (video_param, "video_codec", &video_codec);
-          if (gst_structure_has_field (video_param, "video_native_resolution"))
-            gst_structure_get_uint (video_param, "video_native_resolution", &video_native_resolution);
-          if (gst_structure_has_field (video_param, "video_cea_support"))
-            gst_structure_get_uint (video_param, "video_cea_support", &video_cea_support);
-          if (gst_structure_has_field (video_param, "video_vesa_support"))
-            gst_structure_get_uint (video_param, "video_vesa_support", &video_vesa_support);
-          if (gst_structure_has_field (video_param, "video_hh_support"))
-            gst_structure_get_uint (video_param, "video_hh_support", &video_hh_support);
-          if (gst_structure_has_field (video_param, "video_profile"))
-            gst_structure_get_uint (video_param, "video_profile", &video_profile);
-          if (gst_structure_has_field (video_param, "video_level"))
-            gst_structure_get_uint (video_param, "video_level", &video_level);
-          if (gst_structure_has_field (video_param, "video_latency"))
-            gst_structure_get_uint (video_param, "video_latency", &video_latency);
-          if (gst_structure_has_field (video_param, "video_vertical_resolution"))
-            gst_structure_get_int (video_param, "video_vertical_resolution", &video_vertical_resolution);
-          if (gst_structure_has_field (video_param, "video_horizontal_resolution"))
-            gst_structure_get_int (video_param, "video_horizontal_resolution", &video_horizontal_resolution);
-          if (gst_structure_has_field (video_param, "video_minimum_slicing"))
-            gst_structure_get_int (video_param, "video_minimum_slicing", &video_minimum_slicing);
-          if (gst_structure_has_field (video_param, "video_slice_enc_param"))
-            gst_structure_get_int (video_param, "video_slice_enc_param", &video_slice_enc_param);
-          if (gst_structure_has_field (video_param, "video_framerate_control_support"))
-            gst_structure_get_int (video_param, "video_framerate_control_support", &video_framerate_control_support);
+          if (gst_structure_has_field (wfd_video_formats, "video_codec"))
+            gst_structure_get_uint (wfd_video_formats, "video_codec", &video_codec);
+          if (gst_structure_has_field (wfd_video_formats, "video_native_resolution"))
+            gst_structure_get_uint (wfd_video_formats, "video_native_resolution", &video_native_resolution);
+          if (gst_structure_has_field (wfd_video_formats, "video_cea_support"))
+            gst_structure_get_uint64 (wfd_video_formats, "video_cea_support", &video_cea_support);
+          if (gst_structure_has_field (wfd_video_formats, "video_vesa_support"))
+            gst_structure_get_uint64 (wfd_video_formats, "video_vesa_support", &video_vesa_support);
+          if (gst_structure_has_field (wfd_video_formats, "video_hh_support"))
+            gst_structure_get_uint64 (wfd_video_formats, "video_hh_support", &video_hh_support);
+          if (gst_structure_has_field (wfd_video_formats, "video_profile"))
+            gst_structure_get_uint (wfd_video_formats, "video_profile", &video_profile);
+          if (gst_structure_has_field (wfd_video_formats, "video_level"))
+            gst_structure_get_uint (wfd_video_formats, "video_level", &video_level);
+          if (gst_structure_has_field (wfd_video_formats, "video_latency"))
+            gst_structure_get_uint (wfd_video_formats, "video_latency", &video_latency);
+          if (gst_structure_has_field (wfd_video_formats, "video_vertical_resolution"))
+            gst_structure_get_int (wfd_video_formats, "video_vertical_resolution", &video_vertical_resolution);
+          if (gst_structure_has_field (wfd_video_formats, "video_horizontal_resolution"))
+            gst_structure_get_int (wfd_video_formats, "video_horizontal_resolution", &video_horizontal_resolution);
+          if (gst_structure_has_field (wfd_video_formats, "video_minimum_slicing"))
+            gst_structure_get_int (wfd_video_formats, "video_minimum_slicing", &video_minimum_slicing);
+          if (gst_structure_has_field (wfd_video_formats, "video_slice_enc_param"))
+            gst_structure_get_int (wfd_video_formats, "video_slice_enc_param", &video_slice_enc_param);
+          if (gst_structure_has_field (wfd_video_formats, "video_framerate_control_support"))
+            gst_structure_get_int (wfd_video_formats, "video_framerate_control_support", &video_framerate_control_support);
         }
 
         wfd_res = gst_wfd_message_set_supported_video_format (wfd_msg,
@@ -1508,13 +1510,13 @@ gst_wfd_base_src_handle_request (GstWFDBaseSrc * src, GstRTSPMessage * request)
         gint hdcp_version = 0;
         gint hdcp_port_no = 0;
 
-        if (priv->hdcp_param != NULL) {
-          GstStructure *hdcp_param = priv->hdcp_param;
+        if (priv->wfd_content_protection != NULL) {
+          GstStructure *wfd_content_protection = priv->wfd_content_protection;
 
-          if (gst_structure_has_field (hdcp_param, "hdcp_version"))
-            gst_structure_get_int (hdcp_param, "hdcp_version", &hdcp_version);
-          if (gst_structure_has_field (hdcp_param, "hdcp_port_no"))
-            gst_structure_get_int (hdcp_param, "hdcp_port_no", &hdcp_port_no);
+          if (gst_structure_has_field (wfd_content_protection, "hdcp_version"))
+            gst_structure_get_int (wfd_content_protection, "hdcp_version", &hdcp_version);
+          if (gst_structure_has_field (wfd_content_protection, "hdcp_port_no"))
+            gst_structure_get_int (wfd_content_protection, "hdcp_port_no", &hdcp_port_no);
         }
 
         wfd_res = gst_wfd_message_set_contentprotection_type (wfd_msg,
@@ -1699,8 +1701,9 @@ gst_wfd_base_src_handle_request (GstWFDBaseSrc * src, GstRTSPMessage * request)
       if (wfd_msg->audio_codecs || wfd_msg->video_formats || wfd_msg->video_3d_formats) {
         GstStructure *stream_info = gst_structure_new ("WFDStreamInfo", NULL, NULL);
 
+
         if(wfd_msg->audio_codecs) {
-          res = gst_wfd_base_src_get_audio_parameter(src, wfd_msg);
+          res = gst_wfd_base_src_get_wfd_audio_codecseter(src, wfd_msg);
           if(res != GST_RTSP_OK) {
             goto message_config_error;
           }
@@ -1714,7 +1717,7 @@ gst_wfd_base_src_handle_request (GstWFDBaseSrc * src, GstRTSPMessage * request)
         }
 
         if(wfd_msg->video_formats) {
-          res = gst_wfd_base_src_get_video_parameter(src, wfd_msg);
+          res = gst_wfd_base_src_get_wfd_video_formatseter(src, wfd_msg);
           if(res != GST_RTSP_OK) {
             goto message_config_error;
           }
@@ -3583,13 +3586,12 @@ gst_wfd_base_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
   iface->set_uri = gst_wfd_base_src_uri_set_uri;
 }
 
-static GstRTSPResult _get_cea_resolution_and_set_to_src(GstWFDBaseSrc *src, GstWFDVideoCEAResolution Resolution)
+GstRTSPResult gst_wfd_base_src_get_cea_resolution_and_set_to_src(GstWFDBaseSrc *src, guint64 Resolution)
 {
   GstWFDBaseSrcPrivate *priv = src->priv;
-  GstWFDVideoCEAResolution CEARes = Resolution;
+  guint64 CEARes = Resolution;
 
-  switch(CEARes)
-  {
+  switch(CEARes) {
     case GST_WFD_CEA_UNKNOWN:
       break;
     case GST_WFD_CEA_640x480P60:
@@ -3683,10 +3685,10 @@ static GstRTSPResult _get_cea_resolution_and_set_to_src(GstWFDBaseSrc *src, GstW
   return GST_RTSP_OK;
 }
 
-static GstRTSPResult _get_vesa_resolution_and_set_to_src(GstWFDBaseSrc *src, GstWFDVideoVESAResolution Resolution)
+GstRTSPResult gst_wfd_base_src_get_vesa_resolution_and_set_to_src(GstWFDBaseSrc *src, guint64 Resolution)
 {
   GstWFDBaseSrcPrivate *priv = src->priv;
-  GstWFDVideoVESAResolution VESARes = Resolution;
+  guint64 VESARes = Resolution;
 
   switch(VESARes)
   {
@@ -3848,10 +3850,10 @@ static GstRTSPResult _get_vesa_resolution_and_set_to_src(GstWFDBaseSrc *src, Gst
   return GST_RTSP_OK;
 }
 
-static GstRTSPResult _get_hh_resolution_and_set_to_src(GstWFDBaseSrc *src, GstWFDVideoHHResolution Resolution)
+GstRTSPResult gst_wfd_base_src_get_hh_resolution_and_set_to_src(GstWFDBaseSrc *src, guint64 Resolution)
 {
   GstWFDBaseSrcPrivate *priv = src->priv;
-  GstWFDVideoHHResolution HHRes = Resolution;
+  guint64 HHRes = Resolution;
 
   switch(HHRes)
   {
@@ -3924,7 +3926,7 @@ static GstRTSPResult _get_hh_resolution_and_set_to_src(GstWFDBaseSrc *src, GstWF
 }
 
 static GstRTSPResult
-gst_wfd_base_src_get_audio_parameter(GstWFDBaseSrc * src, GstWFDMessage * msg)
+gst_wfd_base_src_get_wfd_audio_codecseter(GstWFDBaseSrc * src, GstWFDMessage * msg)
 {
   GstWFDBaseSrcPrivate *priv = src->priv;
   GstWFDAudioFormats audio_format = GST_WFD_AUDIO_UNKNOWN;
@@ -3963,14 +3965,14 @@ gst_wfd_base_src_get_audio_parameter(GstWFDBaseSrc * src, GstWFDMessage * msg)
 }
 
 static GstRTSPResult
-gst_wfd_base_src_get_video_parameter(GstWFDBaseSrc * src, GstWFDMessage * msg)
+gst_wfd_base_src_get_wfd_video_formatseter(GstWFDBaseSrc * src, GstWFDMessage * msg)
 {
   GstWFDVideoCodecs cvCodec = GST_WFD_VIDEO_UNKNOWN;
   GstWFDVideoNativeResolution cNative = GST_WFD_VIDEO_CEA_RESOLUTION;
   guint64 cNativeResolution = 0;
-  GstWFDVideoCEAResolution cCEAResolution = GST_WFD_CEA_UNKNOWN;
-  GstWFDVideoVESAResolution cVESAResolution = GST_WFD_VESA_UNKNOWN;
-  GstWFDVideoHHResolution cHHResolution = GST_WFD_HH_UNKNOWN;
+  guint64 cCEAResolution = GST_WFD_CEA_UNKNOWN;
+  guint64 cVESAResolution = GST_WFD_VESA_UNKNOWN;
+  guint64 cHHResolution = GST_WFD_HH_UNKNOWN;
   GstWFDVideoH264Profile cProfile = GST_WFD_H264_UNKNOWN_PROFILE;
   GstWFDVideoH264Level cLevel = GST_WFD_H264_LEVEL_UNKNOWN;
   guint32 cMaxHeight = 0;
@@ -3989,32 +3991,13 @@ gst_wfd_base_src_get_video_parameter(GstWFDBaseSrc * src, GstWFDMessage * msg)
       GST_ERROR("Failed to get prefered video format.");
       return GST_RTSP_ERROR;
   }
-#if 0
-  switch(cNative)
-  {
-    case GST_WFD_VIDEO_CEA_RESOLUTION:
-      _get_cea_resolution_and_set_to_src(src, cCEAResolution);
-      break;
-    case GST_WFD_VIDEO_VESA_RESOLUTION:
-      _get_vesa_resolution_and_set_to_src(src, cVESAResolution);
-      break;
-    case GST_WFD_VIDEO_HH_RESOLUTION:
-      _get_hh_resolution_and_set_to_src(src, cHHResolution);
-      break;
-    default:
-      break;
-  }
-#endif
 
-  if(cCEAResolution != GST_WFD_CEA_UNKNOWN) {
-    _get_cea_resolution_and_set_to_src(src, cCEAResolution);
-  }
-  else if(cVESAResolution != GST_WFD_VESA_UNKNOWN) {
-    _get_vesa_resolution_and_set_to_src(src, cVESAResolution);
-  }
-   else if(cHHResolution != GST_WFD_HH_UNKNOWN) {
-    _get_hh_resolution_and_set_to_src(src, cHHResolution);
-  }
+  if(cCEAResolution != GST_WFD_CEA_UNKNOWN)
+    gst_wfd_base_src_get_cea_resolution_and_set_to_src(src, cCEAResolution);
+  else if(cVESAResolution != GST_WFD_VESA_UNKNOWN)
+    gst_wfd_base_src_get_vesa_resolution_and_set_to_src(src, cVESAResolution);
+   else if(cHHResolution != GST_WFD_HH_UNKNOWN)
+    gst_wfd_base_src_get_hh_resolution_and_set_to_src(src, cHHResolution);
 
   return GST_RTSP_OK;
 }
