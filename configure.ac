@@ -327,18 +327,6 @@ AC_ARG_ENABLE(evaspixmapsink, AC_HELP_STRING([--enable-evaspixmapsink], [using e
   [GST_TIZEN_USE_EVASPIXMAPSINK=yes])
 AM_CONDITIONAL(GST_TIZEN_USE_EVASPIXMAPSINK, test "x$GST_TIZEN_USE_EVASPIXMAPSINK" = "xyes")
 
-dnl use xvimagesrc--------------------------------------------------------------------------
-AC_ARG_ENABLE(xvimagesrc, AC_HELP_STRING([--enable-xvimagesrc], [using xvimagesrc]),
-  [
-    case "${enableval}" in
-      yes) GST_TIZEN_USE_XVIMAGESRC=yes ;;
-      no)  GST_TIZEN_USE_XVIMAGESRC=no ;;
-      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-xvimagesrc) ;;
-    esac
-  ],
-  [GST_TIZEN_USE_XVIMAGESRC=yes])
-AM_CONDITIONAL(GST_TIZEN_USE_XVIMAGESRC, test "x$GST_TIZEN_USE_XVIMAGESRC" = "xyes")
-
 dnl use drmsrc --------------------------------------------------------------------------
 AC_ARG_ENABLE(drmsrc, AC_HELP_STRING([--enable-drmsrc], [using drmsrc]),
   [
@@ -521,8 +509,6 @@ encodebin/src/Makefile
 evasimagesink/Makefile
 evasimagesink/src/Makefile
 evaspixmapsink/Makefile
-xvimagesrc/Makefile
-xvimagesrc/src/Makefile
 toggle/Makefile
 toggle/src/Makefile
 drmsrc/Makefile
