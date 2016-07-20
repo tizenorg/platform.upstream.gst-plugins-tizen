@@ -13,10 +13,6 @@ if GST_TIZEN_USE_EVASIMAGESINK
 SUBDIRS += evasimagesink
 endif
 
-if GST_TIZEN_USE_XVIMAGESRC
-SUBDIRS += xvimagesrc
-endif
-
 if GST_TIZEN_USE_DRMSRC
 SUBDIRS += drmsrc
 endif
@@ -69,10 +65,6 @@ endif
 
 if GST_TIZEN_USE_EVASIMAGESINK
 DIST_SUBDIRS += evasimagesink
-endif
-
-if GST_TIZEN_USE_XVIMAGESRC
-DIST_SUBDIRS += xvimagesrc
 endif
 
 if GST_TIZEN_USE_DRMSRC

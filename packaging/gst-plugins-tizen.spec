@@ -54,11 +54,6 @@ export CFLAGS+=" -DGST_EXT_TIME_ANALYSIS -DGST_EXT_XV_ENHANCEMENT -DGST_WLSINK_E
 
 ./autogen.sh --disable-static
 %configure \
-%if %{with x}
-	--disable-waylandsrc\
-%else
-	--disable-xvimagesrc\
-%endif
 	--disable-drmdecryptor\
 	--disable-static
 
