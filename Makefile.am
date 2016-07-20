@@ -13,10 +13,6 @@ if GST_TIZEN_USE_EVASIMAGESINK
 SUBDIRS += evasimagesink
 endif
 
-#if GST_TIZEN_USE_EVASPIXMAPSINK
-#SUBDIRS += evaspixmapsink
-#endif
-
 if GST_TIZEN_USE_XVIMAGESRC
 SUBDIRS += xvimagesrc
 endif
@@ -65,10 +61,6 @@ if GST_TIZEN_USE_TIZENIPC
 SUBDIRS += tizenipc
 endif
 
-#if GST_TIZEN_USE_WAYLANDSINK
-#SUBDIRS += waylandsink
-#endif
-
 DIST_SUBDIRS = common
 
 if GST_TIZEN_USE_ENCODEBIN
@@ -110,10 +102,6 @@ endif
 
 if GST_TIZEN_USE_DRMDECRYPTOR
 DIST_SUBDIRS += drmdecryptor
-endif
-
-if GST_TIZEN_USE_WAYLANDSINK
-DIST_SUBDIRS += waylandsink
 endif
 
 EXTRA_DIST = \

@@ -171,7 +171,7 @@ AC_SUBST(TBM_LIBS)
 PKG_CHECK_MODULES(MMCOMMON,mm-common)
 AC_SUBST(MMCOMMON_CFLAGS)
 
-dnl required package for evasimagesink/evaspixmapsink
+dnl required package for evasimagesink
 PKG_CHECK_MODULES(EFL, [
   evas >= $EFL_REQUIRED
   ecore >= $EFL_REQUIRED
@@ -187,7 +187,7 @@ PKG_CHECK_MODULES(EFL, [
   ])
 ])
 
-dnl *** belows are related to evaspixmapsink plug-ins ***
+dnl belows are related to wfdtsdemux
 AG_GST_ARG_WITH_PACKAGE_NAME
 AG_GST_ARG_WITH_PACKAGE_ORIGIN
 
@@ -195,97 +195,6 @@ dnl set license and copyright notice
 GST_LICENSE="LGPL"
 AC_DEFINE_UNQUOTED(GST_LICENSE, "$GST_LICENSE", [GStreamer license])
 AC_SUBST(GST_LICENSE)
-
-echo
-AC_MSG_NOTICE([Checking libraries for evaspixmapsink plugin])
-echo
-dnl *** X11 ***
-translit(dnm, m, l) AM_CONDITIONAL(USE_X, true)
-AG_GST_CHECK_FEATURE(X, [X libraries and plugins],
-                  [evaspixmapsink], [
-  AC_PATH_XTRA
-  ac_cflags_save="$CFLAGS"
-  ac_cppflags_save="$CPPFLAGS"
-  CFLAGS="$CFLAGS $X_CFLAGS"
-  CPPFLAGS="$CPPFLAGS $X_CFLAGS"
-
-  dnl now try to find the HEADER
-  AC_CHECK_HEADER(X11/Xlib.h, HAVE_X="yes", HAVE_X="no")
-
-  if test "x$HAVE_X" = "xno"
-  then
-    AC_MSG_NOTICE([cannot find X11 development files])
-  else
-    dnl this is much more than we want
-    X_LIBS="$X_LIBS $X_PRE_LIBS $X_EXTRA_LIBS"
-    dnl AC_PATH_XTRA only defines the path needed to find the X libs,
-    dnl it does not add the libs; therefore we add them here
-    X_LIBS="$X_LIBS -lX11"
-    AC_SUBST(X_CFLAGS)
-    AC_SUBST(X_LIBS)
-
-    dnl xvimagesrc _CFLAGS and _LIB available
-
-    PKG_CHECK_MODULES(DRI2, libdri2)
-    AC_SUBST(DRI2_CFLAGS)
-    AC_SUBST(DRI2_LIBS)
-
-    PKG_CHECK_MODULES(X11, x11)
-    AC_SUBST(X11_CFLAGS)
-    AC_SUBST(X11_LIBS)
-
-    PKG_CHECK_MODULES(XEXT, xext)
-    AC_SUBST(XEXT_CFLAGS)
-    AC_SUBST(XEXT_LIBS)
-
-    PKG_CHECK_MODULES(XV, xv)
-    AC_SUBST(XV_CFLAGS)
-    AC_SUBST(XV_LIBS)
-
-    PKG_CHECK_MODULES(XDAMAGE, xdamage)
-    AC_SUBST(XDAMAGE_CFLAGS)
-    AC_SUBST(XDAMAGE_LIBS)
-
-    PKG_CHECK_MODULES(ECORE_X, ecore-x)
-    AC_SUBST(ECORE_X_CFLAGS)
-    AC_SUBST(ECORE_X_LIBS)
-
-  fi
-  AC_SUBST(HAVE_X)
-  CFLAGS="$ac_cflags_save"
-  CPPFLAGS="$ac_cppflags_save"
-])
-
-dnl Check for Xv extension
-translit(dnm, m, l) AM_CONDITIONAL(USE_XVIDEO, true)
-AG_GST_CHECK_FEATURE(XVIDEO, [X11 XVideo extensions],
-                  [evaspixmapsink], [
-AG_GST_CHECK_XV
-])
-
-dnl check for X Shm
-translit(dnm, m, l) AM_CONDITIONAL(USE_XSHM, true)
-AG_GST_CHECK_FEATURE(XSHM, [X Shared Memory extension], , [
-  if test x$HAVE_X = xyes; then
-    AC_CHECK_LIB(Xext, XShmAttach,
-		 HAVE_XSHM="yes", HAVE_XSHM="no",
-		 $X_LIBS)
-    if test "x$HAVE_XSHM" = "xyes"; then
-      XSHM_LIBS="-lXext"
-    else
-      dnl On AIX, it is in XextSam instead, but we still need -lXext
-      AC_CHECK_LIB(XextSam, XShmAttach,
-		   HAVE_XSHM="yes", HAVE_XSHM="no",
-		   $X_LIBS)
-      if test "x$HAVE_XSHM" = "xyes"; then
-	XSHM_LIBS="-lXext -lXextSam"
-      fi
-    fi
-  fi
-], , [
-  AC_SUBST(HAVE_XSHM)
-  AC_SUBST(XSHM_LIBS)
-])
 
 dnl PKG_CHECK_MODULES(UDEVMGR, unified-dev-mgr)
 dnl AC_SUBST(UDEVMGR_CFLAGS)
@@ -314,18 +223,6 @@ AC_ARG_ENABLE(evasimagesink, AC_HELP_STRING([--enable-evasimagesink], [using eva
   ],
   [GST_TIZEN_USE_EVASIMAGESINK=yes])
 AM_CONDITIONAL(GST_TIZEN_USE_EVASIMAGESINK, test "x$GST_TIZEN_USE_EVASIMAGESINK" = "xyes")
-
-dnl use evaspixmapsink ---------------------------------------------------------------------------
-AC_ARG_ENABLE(evaspixmapsink, AC_HELP_STRING([--enable-evaspixmapsink], [using evaspixmapsink]),
-  [
-    case "${enableval}" in
-      yes) GST_TIZEN_USE_EVASPIXMAPSINK=yes ;;
-      no)  GST_TIZEN_USE_EVASPIXMAPSINK=no ;;
-      *)   AC_MSG_ERROR(bad value ${enableval} for --enable-evaspixmapsink) ;;
-    esac
-  ],
-  [GST_TIZEN_USE_EVASPIXMAPSINK=yes])
-AM_CONDITIONAL(GST_TIZEN_USE_EVASPIXMAPSINK, test "x$GST_TIZEN_USE_EVASPIXMAPSINK" = "xyes")
 
 dnl use xvimagesrc--------------------------------------------------------------------------
 AC_ARG_ENABLE(xvimagesrc, AC_HELP_STRING([--enable-xvimagesrc], [using xvimagesrc]),
@@ -478,26 +375,6 @@ AC_ARG_ENABLE(drmdecryptor, AC_HELP_STRING([--enable-drmdecryptor], [using drmde
  [GST_TIZEN_USE_DRMDECRYPTOR=yes])
 AM_CONDITIONAL(GST_TIZEN_USE_DRMDECRYPTOR, test "x$GST_TIZEN_USE_DRMDECRYPTOR" = "xyes")
 
-dnl use waylandsink --------------------------------------------------------------------------
-AC_ARG_ENABLE(waylandsink, AC_HELP_STRING([--enable-waylandsink], [using waylandsink]),
-[
- case "${enableval}" in
-         yes) GST_TIZEN_USE_WAYLANDSINK=yes ;;
-         no)  GST_TIZEN_USE_WAYLANDSINK=no ;;
-         *)   AC_MSG_ERROR(bad value ${enableval} for --enable-waylandsink) ;;
- esac
- ],
- [GST_TIZEN_USE_WAYLANDSINK=yes])
-AM_CONDITIONAL([GST_TIZEN_USE_WAYLANDSINK], [test "x$GST_TIZEN_USE_WAYLANDSINK" = "xyes"])
-if test "x$GST_TIZEN_USE_WAYLANDSINK" = "xyes"; then
-PKG_CHECK_MODULES(GST_WAYLAND, gstreamer-wayland-1.0 >= 1.2.0)
-AC_SUBST(GST_WAYLAND_CFLAGS)
-AC_SUBST(GST_WAYLAND_LIBS)
-
-PKG_CHECK_MODULES(WAYLAND, wayland-client >= 1.4.0 wayland-tbm-client tizen-extension-client wayland-scanner)
-AC_PATH_PROG([wayland_scanner], [wayland-scanner])
-fi
-
 dnl use tizenipc--------------------------------------------------------------------------
 AC_ARG_ENABLE(tizenipc, AC_HELP_STRING([--enable-tizenipc], [using tizenipc]),
   [
@@ -520,7 +397,6 @@ encodebin/Makefile
 encodebin/src/Makefile
 evasimagesink/Makefile
 evasimagesink/src/Makefile
-evaspixmapsink/Makefile
 xvimagesrc/Makefile
 xvimagesrc/src/Makefile
 toggle/Makefile
@@ -540,8 +416,6 @@ waylandsrc/Makefile
 waylandsrc/src/Makefile
 drmdecryptor/Makefile
 drmdecryptor/src/Makefile
-waylandsink/Makefile
-waylandsink/src/Makefile
 tizenipc/Makefile
 tizenipc/src/Makefile
 )
