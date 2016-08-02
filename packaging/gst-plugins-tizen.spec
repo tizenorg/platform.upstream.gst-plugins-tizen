@@ -5,7 +5,7 @@
 Name:       gst-plugins-tizen
 Version:    1.0.0
 Summary:    GStreamer tizen plugins (common)
-Release:    24
+Release:    25
 Group:      Multimedia/Framework
 Url:        http://gstreamer.freedesktop.org/
 License:    LGPL-2.1+
@@ -41,6 +41,11 @@ BuildRequires:  pkgconfig(wayland-tbm-client)
 BuildRequires:  pkgconfig(tizen-extension-client)
 BuildRequires:  pkgconfig(gstreamer-wayland-1.0)
 %endif
+%if "%{tizen_target_name}" == "TM1"
+#!BuildIgnore:  kernel-headers
+BuildConflicts: linux-glibc-devel
+BuildRequires:  kernel-headers-tizen-dev
+%endif
 
 %description
 GStreamer tizen plugins (common)
@@ -51,6 +56,9 @@ GStreamer tizen plugins (common)
 
 %build
 export CFLAGS+=" -DGST_EXT_TIME_ANALYSIS -DGST_EXT_XV_ENHANCEMENT -DGST_WLSINK_ENHANCEMENT -DEXPORT_API=\"__attribute__((visibility(\\\"default\\\")))\" "
+%if "%{tizen_target_name}" == "TM1"
+export CFLAGS="$CFLAGS -DTIZEN_PROFILE_LITE"
+%endif
 
 ./autogen.sh --disable-static
 %configure \
