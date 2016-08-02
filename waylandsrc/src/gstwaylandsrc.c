@@ -46,6 +46,12 @@
 #include <tbm_surface_internal.h>
 #include "gstwaylandsrc.h"
 
+#ifdef TIZEN_PROFILE_LITE
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/ion.h>
+#endif
+
 GST_DEBUG_CATEGORY_STATIC (waylandsrc_debug);
 #define GST_CAT_DEFAULT waylandsrc_debug
 
@@ -162,6 +168,10 @@ mirror_handle_content (void *data,
 static void
 mirror_handle_stop (void *data, struct tizen_screenmirror *tizen_screenmirror);
 
+#ifdef TIZEN_PROFILE_LITE
+static int __tbm_get_physical_addr_bo(tbm_bo_handle tbm_bo_handle_fd_t, int *phy_addr, int *phy_size);
+#endif
+
 static const struct tizen_screenmirror_listener mirror_listener = {
   mirror_handle_dequeued,
   mirror_handle_content,
@@ -249,6 +259,11 @@ mirror_handle_dequeued (void *data,
   GstClock *clock;
   GstClockTime base_time, next_capture_ts;
   gint64 next_frame_no;
+#ifdef TIZEN_PROFILE_LITE
+  int phy_addr = 0;
+  int phy_size = 0;
+  tbm_bo_handle handle_fd;
+#endif
 
   wl_list_for_each (out_buffer, &src->buffer_list, link) {
     if (out_buffer->wl_buffer != buffer)
@@ -342,16 +357,19 @@ mirror_handle_dequeued (void *data,
         mm_video_buf->handle.bo[0] = out_buffer->bo[0];
         mm_video_buf->handle.bo[1] = out_buffer->bo[1];
         GST_INFO_OBJECT (src, "BO : %p %p", mm_video_buf->handle.bo[0], mm_video_buf->handle.bo[1]);
-
+#ifndef TIZEN_PROFILE_LITE
         mm_video_buf->size[0] = gst_calculate_y_size(src->width, src->height); /*(src->width * src->height);*/
         mm_video_buf->size[1] = gst_calculate_uv_size(src->width, src->height); /*(src->width * (src->height >> 1));*/
         GST_INFO_OBJECT (src, "Size : %d %d", mm_video_buf->size[0], mm_video_buf->size[1]);
-
+#endif
         mm_video_buf->handle.dmabuf_fd[0] = tbm_bo_get_handle(out_buffer->bo[0], TBM_DEVICE_MM).u32;
         mm_video_buf->handle.dmabuf_fd[1] = tbm_bo_get_handle(out_buffer->bo[1], TBM_DEVICE_MM).u32;
 
-        mm_video_buf->handle.paddr[0] = (tbm_bo_map(mm_video_buf->handle.bo[0], TBM_DEVICE_CPU,TBM_OPTION_WRITE)).ptr;
-        mm_video_buf->handle.paddr[1] = (tbm_bo_map(mm_video_buf->handle.bo[1], TBM_DEVICE_CPU,TBM_OPTION_WRITE)).ptr;
+#ifndef TIZEN_PROFILE_LITE
+	mm_video_buf->handle.paddr[0] = (tbm_bo_map(mm_video_buf->handle.bo[0], TBM_DEVICE_CPU, TBM_OPTION_WRITE)).ptr;
+	mm_video_buf->handle.paddr[1] = (tbm_bo_map(mm_video_buf->handle.bo[1], TBM_DEVICE_CPU, TBM_OPTION_WRITE)).ptr;
+#endif
+
         tbm_bo_unmap (mm_video_buf->handle.bo[0]);
         tbm_bo_unmap (mm_video_buf->handle.bo[1]);
 
@@ -366,6 +384,19 @@ mirror_handle_dequeued (void *data,
         mm_video_buf->stride_width[1] = GST_ROUND_UP_16 (mm_video_buf->width[1]);
         mm_video_buf->stride_height[1] = GST_ROUND_UP_16 (mm_video_buf->height[1]);
         mm_video_buf->is_secured = 0;
+
+#ifdef TIZEN_PROFILE_LITE
+        mm_video_buf->size[0] = mm_video_buf->stride_width[0] * mm_video_buf->stride_height[0];
+        mm_video_buf->size[1] = mm_video_buf->stride_width[1] * mm_video_buf->stride_height[1];
+        GST_INFO_OBJECT (src, "Size : %d %d", mm_video_buf->size[0], mm_video_buf->size[1]);
+
+        handle_fd = tbm_bo_get_handle(mm_video_buf->handle.bo[0], TBM_DEVICE_MM);
+        if (__tbm_get_physical_addr_bo(handle_fd, &phy_addr, &phy_size) == 0) {
+                mm_video_buf->handle.paddr[0] = (void *)phy_addr;
+                GST_INFO_OBJECT(src, "mm_vbuffer->paddr : %p", mm_video_buf->handle.paddr[0]);
+        }
+	mm_video_buf->data[0] = (tbm_bo_map(mm_video_buf->handle.bo[0], TBM_DEVICE_CPU, TBM_OPTION_WRITE)).ptr;
+#endif
 
         out_buffer->gst_buffer = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
             out_buffer, sizeof (out_buffer), 0, sizeof (out_buffer), (gpointer) out_buffer,
@@ -649,7 +680,7 @@ tbm_buffer_create (GstWaylandSrc * src)
       info.bpp = tbm_surface_internal_get_bpp(info.format);
       info.num_planes = 2;
       info.planes[0].stride = info.width;
-      info.planes[0].size = gst_calculate_y_size(info.planes[0].stride, info.height);//info.planes[0].stride * info.height
+      info.planes[0].size = gst_calculate_y_size(info.planes[0].stride, info.height);//info.planes[0].stride * info.height;
       info.planes[0].offset = 0;
       info.planes[1].stride = info.width;
       info.planes[1].size = gst_calculate_uv_size(info.planes[1].stride, info.height);//info.planes[1].stride * (info.height >> 1);
@@ -666,8 +697,13 @@ tbm_buffer_create (GstWaylandSrc * src)
       if (out_buffer->bo[1] == NULL)
         goto failed;
 
+#ifdef TIZEN_PROFILE_LITE
+      out_buffer->surface =
+          tbm_surface_internal_create_with_bos(&info, out_buffer->bo, 1);
+#else
       out_buffer->surface =
           tbm_surface_internal_create_with_bos(&info, out_buffer->bo, 2);
+#endif
       if (out_buffer->surface == NULL)
         goto failed;
 
@@ -1306,6 +1342,52 @@ display_handle_mode (void *data,
     GST_LOG ("Output width:%d, height:%d", width, height);
   }
 }
+
+#ifdef TIZEN_PROFILE_LITE
+int __tbm_get_physical_addr_bo(tbm_bo_handle tbm_bo_handle_fd_t, int *phy_addr, int *phy_size)
+{
+        int tbm_bo_handle_fd;
+
+        int ret = 0;
+
+        tbm_bo_handle_fd = tbm_bo_handle_fd_t.u32;
+
+        int open_flags = O_RDWR;
+        int ion_fd = -1;
+
+        struct ion_mmu_data mmu_data;
+        struct ion_custom_data  custom_data;
+
+        mmu_data.fd_buffer = tbm_bo_handle_fd;
+        custom_data.cmd = 4;
+        custom_data.arg = (unsigned long)&mmu_data;
+
+        ion_fd = open("/dev/ion", open_flags);
+        if (ion_fd < 0)
+                GST_ERROR("[tbm_get_physical_addr_bo] ion_fd open device failed");
+
+        if (ioctl(ion_fd, ION_IOC_CUSTOM, &custom_data) < 0) {
+                GST_ERROR("[tbm_get_physical_addr_bo] ION_IOC_CUSTOM failed");
+                ret = -1;
+        }
+
+        if (!ret) {
+                *phy_addr = mmu_data.iova_addr;
+                *phy_size = mmu_data.iova_size;
+        } else {
+                *phy_addr = 0;
+                *phy_size = 0;
+                GST_INFO("[tbm_get_physical_addr_bo] getting physical address is failed. phy_addr = 0");
+        }
+
+        if (ion_fd != -1) {
+                close(ion_fd);
+                ion_fd = -1;
+        }
+
+        return 0;
+}
+#endif
 
 static gboolean
 plugin_init (GstPlugin * plugin)

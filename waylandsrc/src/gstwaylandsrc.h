@@ -126,6 +126,15 @@ struct _GstWaylandSrcClass
   GstPushSrcClass parent;
 };
 
+#ifdef TIZEN_PROFILE_LITE
+struct ion_mmu_data {
+        int master_id;
+        int fd_buffer;
+        unsigned long iova_addr;
+        size_t iova_size;
+};
+#endif
+
 GType
 gst_wayland_src_get_type (void)
     G_GNUC_CONST;
